@@ -1,7 +1,7 @@
 name:                haskclaw
 version:             0.1.0.0
 github:              "githubuser/haskclaw"
-license:             BSD-3-Clause
+license:             MIT
 author:              "Eunmin Kim"
 maintainer:          "telepopsound@gmail.com"
 copyright:           "2026 Eunmin Kim"

@@ -12,7 +12,7 @@ bug-reports:    https://github.com/githubuser/haskclaw/issues
 author:         Eunmin Kim
 maintainer:     telepopsound@gmail.com
 copyright:      2026 Eunmin Kim
-license:        BSD-3-Clause
+license:        MIT
 license-file:   LICENSE
 build-type:     Simple
 extra-source-files:

@@ -45,4 +45,4 @@ Claude registers a cron task; the bot delivers the response each tick.
 
 ## License
 
-BSD-3-Clause.
+MIT.
