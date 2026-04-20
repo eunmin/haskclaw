@@ -9,9 +9,9 @@ version:        0.1.0.0
 description:    Telegram ↔ Claude Code bridge bot
 homepage:       https://github.com/githubuser/haskclaw#readme
 bug-reports:    https://github.com/githubuser/haskclaw/issues
-author:         Author name here
-maintainer:     example@example.com
-copyright:      2026 Author name here
+author:         Eunmin Kim
+maintainer:     telepopsound@gmail.com
+copyright:      2026 Eunmin Kim
 license:        BSD-3-Clause
 license-file:   LICENSE
 build-type:     Simple
