@@ -1,0 +1,299 @@
+cabal-version: 2.2
+
+-- This file has been generated from package.yaml by hpack version 0.38.1.
+--
+-- see: https://github.com/sol/hpack
+
+name:           haskclaw
+version:        0.1.0.0
+description:    Telegram ↔ Claude Code bridge bot
+homepage:       https://github.com/githubuser/haskclaw#readme
+bug-reports:    https://github.com/githubuser/haskclaw/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2026 Author name here
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/haskclaw
+
+library
+  exposed-modules:
+      Haskclaw.Infra.Paths
+      Haskclaw.Infra.Persistence.StateFile
+      Haskclaw.Mcp.Server
+      Haskclaw.Scheduler.Cron
+      Haskclaw.Scheduler.Loop
+      Haskclaw.Scheduler.Store
+      Haskclaw.Scheduler.Types
+      Haskclaw.ServerApp
+      Haskclaw.Telegram.Command.Domain.ClaudeService
+      Haskclaw.Telegram.Command.Domain.TelegramApi
+      Haskclaw.Telegram.Command.Domain.Types
+      Haskclaw.Telegram.Command.UseCase.DispatchMessage
+      Haskclaw.Telegram.Command.UseCase.PollUpdates
+      Haskclaw.Telegram.Command.UseCase.ProcessMessage
+      Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
+      Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway
+      Haskclaw.Telegram.Infra.Interpreter.ClaudeServiceInterpreter
+      Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter
+      Haskclaw.Util.ChatLog
+      Haskclaw.Util.Periodic
+  other-modules:
+      Paths_haskclaw
+  autogen-modules:
+      Paths_haskclaw
+  hs-source-dirs:
+      src
+  default-extensions:
+      ConstraintKinds
+      DataKinds
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      GADTs
+      TemplateHaskell
+      TypeFamilies
+      TypeOperators
+      DeriveGeneric
+      DeriveAnyClass
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      InstanceSigs
+      KindSignatures
+      LambdaCase
+      OverloadedStrings
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      ViewPatterns
+      NoImplicitPrelude
+      StrictData
+      DuplicateRecordFields
+      OverloadedRecordDot
+      QuasiQuotes
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , cron
+    , directory
+    , effectful
+    , effectful-th
+    , filepath
+    , http-client
+    , http-client-tls
+    , http-types
+    , random
+    , relude
+    , stm
+    , text
+    , time
+    , typed-process
+  default-language: Haskell2010
+
+executable haskclaw-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_haskclaw
+  autogen-modules:
+      Paths_haskclaw
+  hs-source-dirs:
+      app
+  default-extensions:
+      ConstraintKinds
+      DataKinds
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      GADTs
+      TemplateHaskell
+      TypeFamilies
+      TypeOperators
+      DeriveGeneric
+      DeriveAnyClass
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      InstanceSigs
+      KindSignatures
+      LambdaCase
+      OverloadedStrings
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      ViewPatterns
+      NoImplicitPrelude
+      StrictData
+      DuplicateRecordFields
+      OverloadedRecordDot
+      QuasiQuotes
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , cron
+    , directory
+    , effectful
+    , effectful-th
+    , filepath
+    , haskclaw
+    , http-client
+    , http-client-tls
+    , http-types
+    , random
+    , relude
+    , stm
+    , text
+    , time
+    , typed-process
+  default-language: Haskell2010
+
+executable haskclaw-mcp
+  main-is: Main.hs
+  other-modules:
+      Paths_haskclaw
+  autogen-modules:
+      Paths_haskclaw
+  hs-source-dirs:
+      mcp
+  default-extensions:
+      ConstraintKinds
+      DataKinds
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      GADTs
+      TemplateHaskell
+      TypeFamilies
+      TypeOperators
+      DeriveGeneric
+      DeriveAnyClass
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      InstanceSigs
+      KindSignatures
+      LambdaCase
+      OverloadedStrings
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      ViewPatterns
+      NoImplicitPrelude
+      StrictData
+      DuplicateRecordFields
+      OverloadedRecordDot
+      QuasiQuotes
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , cron
+    , directory
+    , effectful
+    , effectful-th
+    , filepath
+    , haskclaw
+    , http-client
+    , http-client-tls
+    , http-types
+    , random
+    , relude
+    , stm
+    , text
+    , time
+    , typed-process
+  default-language: Haskell2010
+
+test-suite haskclaw-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Haskclaw.Unit.Infra.PathsSpec
+      Haskclaw.Unit.Mcp.ServerSpec
+      Haskclaw.Unit.Scheduler.CronSpec
+      Haskclaw.Unit.Scheduler.StoreSpec
+      Haskclaw.Unit.Telegram.Command.InMemoryClaudeService
+      Haskclaw.Unit.Telegram.Command.InMemoryTelegramApi
+      Haskclaw.Unit.Telegram.Command.UseCase.DispatchMessageSpec
+      Haskclaw.Unit.Telegram.Command.UseCase.PollUpdatesSpec
+      Haskclaw.Unit.Telegram.Command.UseCase.ProcessMessageSpec
+      Haskclaw.Unit.Telegram.Infra.Gateway.ClaudeProcessGatewaySpec
+      Haskclaw.Unit.Util.ChatLogSpec
+      Haskclaw.Unit.Util.PeriodicSpec
+      Paths_haskclaw
+  autogen-modules:
+      Paths_haskclaw
+  hs-source-dirs:
+      test
+  default-extensions:
+      ConstraintKinds
+      DataKinds
+      FlexibleContexts
+      FlexibleInstances
+      MultiParamTypeClasses
+      GADTs
+      TemplateHaskell
+      TypeFamilies
+      TypeOperators
+      DeriveGeneric
+      DeriveAnyClass
+      DerivingStrategies
+      GeneralizedNewtypeDeriving
+      InstanceSigs
+      KindSignatures
+      LambdaCase
+      OverloadedStrings
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      ViewPatterns
+      NoImplicitPrelude
+      StrictData
+      DuplicateRecordFields
+      OverloadedRecordDot
+      QuasiQuotes
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      hspec-discover:hspec-discover
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , cron
+    , directory
+    , effectful
+    , effectful-th
+    , filepath
+    , haskclaw
+    , hspec
+    , http-client
+    , http-client-tls
+    , http-types
+    , random
+    , relude
+    , stm
+    , text
+    , time
+    , typed-process
+  default-language: Haskell2010

@@ -1,0 +1,124 @@
+module Haskclaw.ServerApp
+  ( main
+  ) where
+
+import Relude hiding (Reader, runReader)
+
+import Control.Concurrent (forkIO, myThreadId)
+import Control.Concurrent.STM (TChan, readTChan)
+import qualified Data.Map.Strict as Map
+import Effectful (Eff, IOE, runEff)
+import Effectful.Reader.Dynamic (Reader, runReader)
+import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
+import System.Environment (getEnv)
+
+import Haskclaw.Infra.Paths (ensureChatDir, ensureHaskclawDirs)
+import Haskclaw.Infra.Persistence.StateFile (loadSessions, saveSessions)
+import Haskclaw.Scheduler.Loop (clearInFlight, runLoop)
+import Haskclaw.Telegram.Command.Domain.ClaudeService (askClaude)
+import Haskclaw.Telegram.Command.Domain.TelegramApi (TelegramApi)
+import Haskclaw.Telegram.Command.Domain.Types
+  ( BotState (..)
+  , ChatId
+  , ChatTask (..)
+  , Message (..)
+  , newBotStateWith
+  )
+import Haskclaw.Telegram.Command.UseCase.DispatchMessage (dispatch)
+import Haskclaw.Telegram.Command.UseCase.PollUpdates (pollOnce)
+import Haskclaw.Telegram.Command.UseCase.ProcessMessage (processMessage)
+import Haskclaw.Util.ChatLog (logChat)
+import Haskclaw.Util.Periodic (withPeriodic)
+import qualified Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway as TelegramGateway
+import qualified Haskclaw.Telegram.Infra.Interpreter.ClaudeServiceInterpreter as ClaudeServiceInterpreter
+import Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter (TelegramConfig (..))
+import qualified Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter as TelegramApiInterpreter
+
+type App = Eff '[TelegramApi, Reader TelegramConfig, IOE]
+
+runApp :: TelegramConfig -> App a -> IO a
+runApp cfg =
+  runEff
+    . runReader cfg
+    . TelegramApiInterpreter.run
+
+main :: IO ()
+main = do
+  token <- getEnv "TELEGRAM_BOT_TOKEN" <&> toText
+  manager <- newManager tlsManagerSettings
+  let cfg = TelegramConfig{token = token, manager = manager}
+  ensureHaskclawDirs
+  sessions <- loadSessions
+  botState <- newBotStateWith sessions
+  putTextLn "haskclaw bot started. Polling for messages..."
+  let spawn = chatWorker botState manager token
+  void $ forkIO $ runLoop botState spawn
+  runApp cfg $ pollLoop botState cfg
+
+pollLoop :: BotState -> TelegramConfig -> App ()
+pollLoop botState cfg = do
+  offset <- liftIO $ readTVarIO botState.offset
+  (messages, nextOffset) <- pollOnce offset
+  liftIO $ do
+    forM_ nextOffset $ \o -> atomically $ writeTVar botState.offset (Just o)
+    forM_ messages $ dispatch botState (chatWorker botState cfg.manager cfg.token)
+  pollLoop botState cfg
+
+typingIntervalMicros :: Int
+typingIntervalMicros = 4000000
+
+chatWorker :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> IO ()
+chatWorker botState manager token cid chan = void $ forkIO $ do
+  tid <- myThreadId
+  workDir <- ensureChatDir cid
+  logChat cid $ "worker started thread=" <> show tid <> " cwd=" <> toText workDir
+  forever $ do
+    task <- atomically $ readTChan chan
+    case task of
+      UserMsg msg ->
+        handleUserMsg botState manager token cid msg
+      ScheduledRun taskId' mLbl promptTxt ->
+        handleScheduled botState manager token cid taskId' mLbl promptTxt
+
+handleUserMsg :: BotState -> Manager -> Text -> ChatId -> Message -> IO ()
+handleUserMsg botState manager token cid msg = do
+  let user = fromMaybe "unknown" msg.fromUsername
+      content = fromMaybe "" msg.text
+  logChat cid $ "received @" <> user <> ": " <> content
+  mSessionId <- Map.lookup cid <$> readTVarIO botState.sessions
+  response <- withPeriodic typingIntervalMicros
+    (TelegramGateway.postSendChatAction manager token cid "typing")
+    (runEff $ ClaudeServiceInterpreter.run $ processMessage mSessionId msg)
+  case response of
+    Nothing -> pure ()
+    Just (resp, mNewSessionId) -> do
+      whenJust mNewSessionId $ \newSessionId -> do
+        newSessions <- atomically $ do
+          modifyTVar' botState.sessions (Map.insert cid newSessionId)
+          readTVar botState.sessions
+        saveSessions newSessions
+      logChat cid $ "claude: " <> resp
+      TelegramGateway.postSendMessage manager token cid resp
+
+-- | Run a scheduled prompt in a fresh session (no --resume). Always clears
+--   the in-flight marker afterwards. Failures are delivered to the chat.
+handleScheduled
+  :: BotState -> Manager -> Text
+  -> ChatId -> Text -> Maybe Text -> Text
+  -> IO ()
+handleScheduled botState manager token cid tid mLabel promptTxt = do
+  let labelTag = maybe "" (\l -> "[" <> l <> "] ") mLabel
+  logChat cid $ "scheduled run " <> tid <> " " <> labelTag <> "start"
+  (resp, mSid) <- withPeriodic typingIntervalMicros
+    (TelegramGateway.postSendChatAction manager token cid "typing")
+    (runEff $ ClaudeServiceInterpreter.run $ askClaude cid Nothing promptTxt)
+  case mSid of
+    Just _ -> do
+      logChat cid $ "scheduled run " <> tid <> " ok"
+      TelegramGateway.postSendMessage manager token cid (labelTag <> resp)
+    Nothing -> do
+      logChat cid $ "scheduled run " <> tid <> " failed"
+      TelegramGateway.postSendMessage manager token cid
+        ("[scheduled task failed] " <> labelTag <> resp)
+  clearInFlight botState cid tid
