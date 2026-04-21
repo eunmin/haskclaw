@@ -44,6 +44,7 @@ library
       Haskclaw.Telegram.Infra.Interpreter.ClaudeServiceInterpreter
       Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter
       Haskclaw.Util.ChatLog
+      Haskclaw.Util.MarkdownImage
       Haskclaw.Util.Periodic
   other-modules:
       Paths_haskclaw
@@ -230,7 +231,9 @@ test-suite haskclaw-test
       Haskclaw.Unit.Telegram.Command.UseCase.PollUpdatesSpec
       Haskclaw.Unit.Telegram.Command.UseCase.ProcessMessageSpec
       Haskclaw.Unit.Telegram.Infra.Gateway.ClaudeProcessGatewaySpec
+      Haskclaw.Unit.Telegram.Infra.Gateway.TelegramHttpGatewaySpec
       Haskclaw.Unit.Util.ChatLogSpec
+      Haskclaw.Unit.Util.MarkdownImageSpec
       Haskclaw.Unit.Util.PeriodicSpec
       Paths_haskclaw
   hs-source-dirs:

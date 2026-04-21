@@ -2,11 +2,18 @@ module Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway
   ( fetchUpdates
   , postSendMessage
   , postSendChatAction
+  , postSendPhoto
+  , buildMultipartBody
+  , photoMimeType
   ) where
 
 import Relude
 
+import Control.Exception (IOException, try)
 import Data.Aeson (eitherDecode, encode, object, (.=))
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Text as T
 import Network.HTTP.Client
   ( Manager
   , Request
@@ -22,6 +29,8 @@ import Network.HTTP.Client
   , responseTimeoutMicro
   )
 import Network.HTTP.Types.Status (statusIsSuccessful)
+import System.FilePath (takeExtension, takeFileName)
+import System.Random (randomIO)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), GetUpdatesResponse (..), Update, UpdateId (..))
 
@@ -74,6 +83,74 @@ postSendChatAction manager token (ChatId cid) action = do
   unless (statusIsSuccessful (responseStatus resp)) $
     putTextLn $ "sendChatAction error: " <> show (responseStatus resp)
       <> " " <> decodeUtf8 (toStrict (responseBody resp))
+
+-- | Send a local image file as a photo. Falls back silently when the file is
+--   missing or the upload fails; errors are logged but never raised so the
+--   text portion of the reply still reaches the user.
+postSendPhoto :: Manager -> Text -> ChatId -> FilePath -> Maybe Text -> IO ()
+postSendPhoto manager token (ChatId cid) photoPath mCaption = do
+  eBytes <- try @IOException (BS.readFile photoPath)
+  case eBytes of
+    Left err ->
+      putTextLn $ "sendPhoto read error: " <> toText (show err :: String)
+    Right bytes -> do
+      boundary <- buildBoundary
+      let url = "https://api.telegram.org/bot" <> toString token <> "/sendPhoto"
+          body = buildMultipartBody boundary (show cid) mCaption photoPath bytes
+          ctype = "multipart/form-data; boundary=" <> encodeUtf8 boundary
+      req <- parseRequest url
+      let req' = req
+            { method = "POST"
+            , requestBody = RequestBodyLBS body
+            , requestHeaders = [("Content-Type", ctype)]
+            }
+      resp <- httpLbs req' manager
+      unless (statusIsSuccessful (responseStatus resp)) $
+        putTextLn $ "sendPhoto error: " <> show (responseStatus resp)
+          <> " " <> decodeUtf8 (toStrict (responseBody resp))
+
+buildBoundary :: IO Text
+buildBoundary = do
+  n <- randomIO @Word64
+  pure $ "haskclaw-boundary-" <> show n
+
+-- | Build a multipart/form-data body for Telegram's sendPhoto. Exposed for
+--   unit tests; pure (no file IO).
+buildMultipartBody
+  :: Text       -- ^ boundary (without leading dashes)
+  -> Text       -- ^ chat_id as decimal
+  -> Maybe Text -- ^ optional caption
+  -> FilePath   -- ^ photo file path (used for filename + MIME)
+  -> ByteString -- ^ photo file bytes
+  -> LByteString
+buildMultipartBody boundary chatIdText mCaption photoPath bytes =
+  let b = "--" <> encodeUtf8 boundary
+      crlf = "\r\n"
+      field name value =
+        b <> crlf
+          <> "Content-Disposition: form-data; name=\"" <> name <> "\"" <> crlf
+          <> crlf
+          <> value <> crlf
+      filePart =
+        b <> crlf
+          <> "Content-Disposition: form-data; name=\"photo\"; filename=\""
+          <> encodeUtf8 (toText (takeFileName photoPath)) <> "\"" <> crlf
+          <> "Content-Type: " <> encodeUtf8 (photoMimeType photoPath) <> crlf
+          <> crlf
+          <> bytes <> crlf
+      trailer = b <> "--" <> crlf
+      captionPart = maybe "" (field "caption" . encodeUtf8) mCaption
+      head' = field "chat_id" (encodeUtf8 chatIdText)
+  in LBS.fromStrict (head' <> captionPart <> filePart <> trailer)
+
+photoMimeType :: FilePath -> Text
+photoMimeType p = case T.toLower (toText (takeExtension p)) of
+  ".png"  -> "image/png"
+  ".jpg"  -> "image/jpeg"
+  ".jpeg" -> "image/jpeg"
+  ".webp" -> "image/webp"
+  ".gif"  -> "image/gif"
+  _       -> "application/octet-stream"
 
 buildGetUpdatesRequest :: Text -> Maybe UpdateId -> IO Request
 buildGetUpdatesRequest token mOffset = do

@@ -6,11 +6,14 @@ import Relude hiding (Reader, runReader)
 
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (TChan, readTChan)
+import Control.Exception (IOException, try)
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import Effectful (Eff, IOE, runEff)
 import Effectful.Reader.Dynamic (Reader, runReader)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import System.Directory (doesFileExist)
 import System.Environment (getEnv)
 
 import Haskclaw.Infra.Paths (ensureChatDir, ensureHaskclawDirs)
@@ -34,6 +37,7 @@ import Haskclaw.Telegram.Command.UseCase.DispatchMessage
 import Haskclaw.Telegram.Command.UseCase.PollUpdates (pollOnce)
 import Haskclaw.Telegram.Command.UseCase.ProcessMessage (processMessage)
 import Haskclaw.Util.ChatLog (logChat)
+import Haskclaw.Util.MarkdownImage (InlineImage (..), extractImages)
 import Haskclaw.Util.Periodic (withPeriodic)
 import qualified Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway as TelegramGateway
 import qualified Haskclaw.Telegram.Infra.Interpreter.ClaudeServiceInterpreter as ClaudeServiceInterpreter
@@ -127,7 +131,7 @@ handleUserTurn botState manager token cid chan msg = do
           readTVar botState.sessions
         saveSessions newSessions
       logChat cid $ "claude: " <> resp
-      TelegramGateway.postSendMessage manager token cid resp
+      deliverReply manager token cid resp
       pure TurnCompleted
 
 -- | Run a scheduled prompt in a fresh session (no --resume). Always clears
@@ -145,9 +149,29 @@ handleScheduled botState manager token cid tid mLabel promptTxt = do
   case mSid of
     Just _ -> do
       logChat cid $ "scheduled run " <> tid <> " ok"
-      TelegramGateway.postSendMessage manager token cid (labelTag <> resp)
+      deliverReply manager token cid (labelTag <> resp)
     Nothing -> do
       logChat cid $ "scheduled run " <> tid <> " failed"
       TelegramGateway.postSendMessage manager token cid
         ("[scheduled task failed] " <> labelTag <> resp)
   clearInFlight botState cid tid
+
+-- | Split a Claude reply into inline images and residual text. Images are sent
+--   via sendPhoto (skipped if the file is missing); leftover text is sent via
+--   sendMessage. Either part may be empty — in that case the corresponding
+--   call is skipped entirely.
+deliverReply :: Manager -> Text -> ChatId -> Text -> IO ()
+deliverReply manager token cid reply = do
+  let (cleaned, imgs) = extractImages reply
+  forM_ imgs $ \img -> do
+    exists <- try @IOException (doesFileExist img.path)
+    case exists of
+      Right True ->
+        TelegramGateway.postSendPhoto manager token cid img.path img.caption
+      Right False ->
+        logChat cid $ "image path missing, skipping: " <> toText img.path
+      Left err ->
+        logChat cid $ "image path check failed: " <> toText (show err :: String)
+  let trimmed = T.strip cleaned
+  unless (T.null trimmed) $
+    TelegramGateway.postSendMessage manager token cid trimmed

@@ -83,6 +83,16 @@ spec = do
           s = render (mergeHaskclawSettings input)
       T.count "mcp__haskclaw" s `shouldBe` 1
 
+    it "adds the Bash(agent-browser:*) permission alongside mcp__haskclaw" $ do
+      let s = render (mergeHaskclawSettings (object []))
+      all (`T.isInfixOf` s) ["mcp__haskclaw", "Bash(agent-browser:*)"] `shouldBe` True
+
+    it "does not duplicate Bash(agent-browser:*) when already present" $ do
+      let Right input = eitherDecode
+            "{\"permissions\":{\"allow\":[\"Bash(agent-browser:*)\"]}}"
+          s = render (mergeHaskclawSettings input)
+      T.count "Bash(agent-browser:*)" s `shouldBe` 1
+
   describe "upsertManagedBlock" $ do
     let block = "managed body\nsecond line"
 

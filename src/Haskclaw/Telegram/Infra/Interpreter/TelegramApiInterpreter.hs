@@ -29,3 +29,6 @@ run = interpret $ \_ -> \case
   SendMessage chatId text -> do
     cfg <- ask @TelegramConfig
     liftIO $ Gateway.postSendMessage cfg.manager cfg.token chatId text
+  SendPhoto chatId path mCaption -> do
+    cfg <- ask @TelegramConfig
+    liftIO $ Gateway.postSendPhoto cfg.manager cfg.token chatId path mCaption

@@ -24,3 +24,4 @@ run ref = interpret $ \_ -> \case
       Just (UpdateId oid) ->
         filter (\u -> let UpdateId uid = u.updateId in uid >= oid) updates
   SendMessage _chatId _text -> pure ()
+  SendPhoto _chatId _path _caption -> pure ()

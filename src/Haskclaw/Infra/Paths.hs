@@ -97,12 +97,14 @@ buildMcpJson (ChatId n) mcpPath = object
       ]
   ]
 
--- | Idempotent merge: ensures 'permissions.allow' contains "mcp__haskclaw".
---   All other keys in the object are preserved untouched.
+-- | Idempotent merge: ensures 'permissions.allow' contains the haskclaw-managed
+--   entries. All other keys in the object are preserved untouched.
 mergeHaskclawSettings :: Value -> Value
 mergeHaskclawSettings input =
   let base = objectKeyMap input
-  in Object (ensureAllowPerm "mcp__haskclaw" base)
+      withMcp = ensureAllowPerm "mcp__haskclaw" base
+      withBrowser = ensureAllowPerm "Bash(agent-browser:*)" withMcp
+  in Object withBrowser
 
 objectKeyMap :: Value -> KM.KeyMap Value
 objectKeyMap (Object o) = o
@@ -155,7 +157,20 @@ defaultSharedClaudeMd =
   \registration to the user, including the returned task id.\n\
   \\n\
   \Scheduled runs execute in a fresh Claude session (no resume); the response\n\
-  \is delivered to this chat automatically.\n"
+  \is delivered to this chat automatically.\n\
+  \\n\
+  \## Sending images back to Telegram\n\
+  \\n\
+  \To deliver a local image (e.g. a screenshot produced by the agent-browser\n\
+  \skill) to the user, include it in your reply using standard Markdown image\n\
+  \syntax with an **absolute local file path**:\n\
+  \\n\
+  \    ![optional caption](/absolute/path/to/image.png)\n\
+  \\n\
+  \The bot extracts each such reference, sends the file via Telegram's\n\
+  \sendPhoto API (the alt text becomes the caption), and strips the markup\n\
+  \from the text reply. Supported extensions: .png, .jpg, .jpeg, .webp, .gif.\n\
+  \Remote URLs (http/https) are left untouched in the text.\n"
 
 -- | Upsert a managed block inside a longer document. The block is delimited
 --   by 'managedBeginMarker' and 'managedEndMarker'. Content outside the
