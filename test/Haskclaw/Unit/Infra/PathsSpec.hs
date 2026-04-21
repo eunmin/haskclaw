@@ -67,31 +67,45 @@ spec = do
         `shouldBe` True
 
   describe "mergeHaskclawSettings" $ do
+    let dir = "/tmp/haskclaw-test-chat"
+        readPerm = "Read(//" <> toText dir <> "/**)"
+
     it "creates the mcp__haskclaw permission on an empty object" $ do
-      let s = render (mergeHaskclawSettings (object []))
+      let s = render (mergeHaskclawSettings dir (object []))
       "mcp__haskclaw" `T.isInfixOf` s `shouldBe` True
 
     it "preserves other top-level keys and existing permissions" $ do
       let Right input = eitherDecode
             "{\"permissions\":{\"allow\":[\"WebSearch\"]},\"custom\":true}"
-          s = render (mergeHaskclawSettings input)
+          s = render (mergeHaskclawSettings dir input)
       all (`T.isInfixOf` s) ["WebSearch", "mcp__haskclaw", "custom"] `shouldBe` True
 
     it "does not duplicate mcp__haskclaw when already present" $ do
       let Right input = eitherDecode
             "{\"permissions\":{\"allow\":[\"mcp__haskclaw\"]}}"
-          s = render (mergeHaskclawSettings input)
+          s = render (mergeHaskclawSettings dir input)
       T.count "mcp__haskclaw" s `shouldBe` 1
 
     it "adds the Bash(agent-browser:*) permission alongside mcp__haskclaw" $ do
-      let s = render (mergeHaskclawSettings (object []))
+      let s = render (mergeHaskclawSettings dir (object []))
       all (`T.isInfixOf` s) ["mcp__haskclaw", "Bash(agent-browser:*)"] `shouldBe` True
 
     it "does not duplicate Bash(agent-browser:*) when already present" $ do
       let Right input = eitherDecode
             "{\"permissions\":{\"allow\":[\"Bash(agent-browser:*)\"]}}"
-          s = render (mergeHaskclawSettings input)
+          s = render (mergeHaskclawSettings dir input)
       T.count "Bash(agent-browser:*)" s `shouldBe` 1
+
+    it "adds the Read permission for the chat directory" $ do
+      let s = render (mergeHaskclawSettings dir (object []))
+      readPerm `T.isInfixOf` s `shouldBe` True
+
+    it "does not duplicate the Read permission when already present" $ do
+      let seeded = "{\"permissions\":{\"allow\":[\"Read(//"
+            <> toString dir <> "/**)\"]}}"
+          Right input = eitherDecode (encodeUtf8 seeded)
+          s = render (mergeHaskclawSettings dir input)
+      T.count readPerm s `shouldBe` 1
 
   describe "upsertManagedBlock" $ do
     let block = "managed body\nsecond line"

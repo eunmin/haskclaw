@@ -98,13 +98,19 @@ buildMcpJson (ChatId n) mcpPath = object
   ]
 
 -- | Idempotent merge: ensures 'permissions.allow' contains the haskclaw-managed
---   entries. All other keys in the object are preserved untouched.
-mergeHaskclawSettings :: Value -> Value
-mergeHaskclawSettings input =
+--   entries (MCP tool, agent-browser Bash, Read access to the chat project
+--   directory). All other keys in the object are preserved untouched.
+mergeHaskclawSettings :: FilePath -> Value -> Value
+mergeHaskclawSettings dir input =
   let base = objectKeyMap input
       withMcp = ensureAllowPerm "mcp__haskclaw" base
       withBrowser = ensureAllowPerm "Bash(agent-browser:*)" withMcp
-  in Object withBrowser
+      withRead = ensureAllowPerm (chatReadPerm dir) withBrowser
+  in Object withRead
+
+-- | Build the 'Read(//abs/path/**)' permission string Claude Code expects.
+chatReadPerm :: FilePath -> Text
+chatReadPerm dir = "Read(//" <> toText dir <> "/**)"
 
 objectKeyMap :: Value -> KM.KeyMap Value
 objectKeyMap (Object o) = o
@@ -170,7 +176,48 @@ defaultSharedClaudeMd =
   \The bot extracts each such reference, sends the file via Telegram's\n\
   \sendPhoto API (the alt text becomes the caption), and strips the markup\n\
   \from the text reply. Supported extensions: .png, .jpg, .jpeg, .webp, .gif.\n\
-  \Remote URLs (http/https) are left untouched in the text.\n"
+  \Remote URLs (http/https) are left untouched in the text.\n\
+  \\n\
+  \## Browser automation — agent-browser\n\
+  \\n\
+  \The `agent-browser` CLI is available on PATH. **Do not** call it through\n\
+  \the Skill tool or a SlashCommand — it is a plain Bash command with\n\
+  \subcommands. The bot has already whitelisted `Bash(agent-browser:*)`.\n\
+  \\n\
+  \Core workflow:\n\
+  \\n\
+  \1. `agent-browser open <url>` — navigate.\n\
+  \2. `agent-browser snapshot -i` — list interactive elements with `@eN` refs.\n\
+  \3. Interact: `click @e1`, `fill @e2 \"text\"`, `press Enter`, `hover @e3`,\n\
+  \   `select @e4 \"value\"`, `scroll down 500`, `upload @e5 /abs/file`.\n\
+  \4. Re-snapshot after navigation or major DOM changes.\n\
+  \5. Extract: `get text @e1`, `get attr @e2 href`, `get title`, `get url`.\n\
+  \6. Capture: `agent-browser screenshot <abs_path.png>` — then reference the\n\
+  \   file in your reply using the Markdown image syntax above so Telegram\n\
+  \   delivers it to the user.\n\
+  \7. `agent-browser close` — release the browser when done.\n\
+  \\n\
+  \### Persistent login (per-chat)\n\
+  \\n\
+  \Reuse authenticated sessions by saving storage state to\n\
+  \`./browser-state.json` in the current working directory (the chat's\n\
+  \project root — this file is writable and readable):\n\
+  \\n\
+  \    agent-browser state save ./browser-state.json     # after a successful login\n\
+  \    agent-browser state load ./browser-state.json     # on a later turn, before `open`\n\
+  \\n\
+  \If the user is not yet logged in, walk them through the login flow (fill\n\
+  \credentials they provide, click submit, wait for the dashboard URL) and\n\
+  \save the state once authenticated. On the next browser task, load the\n\
+  \state before navigating so cookies and localStorage are restored.\n\
+  \\n\
+  \### Tips\n\
+  \\n\
+  \- Snapshots are accessibility-tree based; prefer `@eN` refs over raw CSS.\n\
+  \- Use `agent-browser wait --url \"**/dashboard\"` or `wait --load networkidle`\n\
+  \  after clicks that trigger navigation.\n\
+  \- Save screenshots under `/tmp/` or the chat directory so the absolute\n\
+  \  path is easy to embed in the reply.\n"
 
 -- | Upsert a managed block inside a longer document. The block is delimited
 --   by 'managedBeginMarker' and 'managedEndMarker'. Content outside the
@@ -241,8 +288,9 @@ ensureChatConfig cid = do
   mcpPath <- mcpBinaryPath
   mcpJsonPath <- chatMcpJsonPath cid
   settingsPath <- chatSettingsPath cid
+  dir <- chatDir cid
   writeMcpJson cid mcpPath mcpJsonPath
-  upsertSettings settingsPath
+  upsertSettings dir settingsPath
   pure configDir
 
 -- | Overwrite .mcp.json with the current haskclaw registration. We rewrite
@@ -253,10 +301,10 @@ writeMcpJson cid mcpPath path = do
   current <- readBytesOr "" path
   when (current /= encoded) $ atomicWriteBytes path encoded
 
-upsertSettings :: FilePath -> IO ()
-upsertSettings path = do
+upsertSettings :: FilePath -> FilePath -> IO ()
+upsertSettings dir path = do
   existing <- readJsonOr (object []) path
-  let merged  = mergeHaskclawSettings existing
+  let merged  = mergeHaskclawSettings dir existing
       encoded = encode merged
   current <- readBytesOr "" path
   when (current /= encoded) $ atomicWriteBytes path encoded
