@@ -21,32 +21,18 @@ data InlineImage = InlineImage
 --   whitespace tidied) and the list of inline images in the order encountered.
 extractImages :: Text -> (Text, [InlineImage])
 extractImages input =
-  let (pieces, imgs) = goPieces input
-  in (normalize (T.concat pieces), imgs)
-
-goPieces :: Text -> ([Text], [InlineImage])
-goPieces txt = case T.breakOn "![" txt of
-  (pre, rest) | T.null rest -> ([pre], [])
-              | otherwise -> case parseHead rest of
-                  Just (img, remainder) ->
-                    let (morePieces, moreImgs) = goPieces remainder
-                    in (stripTrailingInline pre : stripLeadingInline morePieces, img : moreImgs)
-                  Nothing ->
-                    let (morePieces, moreImgs) =
-                          goPieces (T.drop 2 rest) -- skip past the "!["
-                    in (pre <> "![" : morePieces, moreImgs)
-
--- | Glue @'stripTrailingInline'@ output to the start of a list without losing
---   elements. The first piece of the tail has its leading inline space removed.
-stripLeadingInline :: [Text] -> [Text]
-stripLeadingInline [] = []
-stripLeadingInline (p : ps) = T.dropWhile isSpaceNotNl p : ps
-
-stripTrailingInline :: Text -> Text
-stripTrailingInline = T.dropWhileEnd isSpaceNotNl
-
-isSpaceNotNl :: Char -> Bool
-isSpaceNotNl c = Char.isSpace c && c /= '\n'
+  let (raw, imgs) = go input
+  in (normalize raw, imgs)
+  where
+    go txt = case T.breakOn "![" txt of
+      (pre, rest) | T.null rest -> (pre, [])
+                  | otherwise -> case parseHead rest of
+                      Just (img, remainder) ->
+                        let (tailTxt, tailImgs) = go remainder
+                        in (mergeFragments pre tailTxt, img : tailImgs)
+                      Nothing ->
+                        let (tailTxt, tailImgs) = go (T.drop 2 rest)
+                        in (pre <> "![" <> tailTxt, tailImgs)
 
 -- | Parse a single @![alt](url)@ starting at the beginning of the input.
 --   Returns the parsed image plus the remainder after it.
@@ -82,6 +68,27 @@ isLocalImagePath t =
 
 supportedExtensions :: [Text]
 supportedExtensions = [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+
+-- | Rejoin the text fragments around a removed image. If both sides were only
+--   separated by inline whitespace (spaces/tabs), leave a single space so
+--   surrounding words don't collide. At a newline boundary, let
+--   'collapseNewlines' handle spacing instead.
+mergeFragments :: Text -> Text -> Text
+mergeFragments pre suf =
+  let preStrip = T.dropWhileEnd isSpaceNotNl pre
+      sufStrip = T.dropWhile isSpaceNotNl suf
+      preHadSpace = T.length pre > T.length preStrip
+      sufHadSpace = T.length suf > T.length sufStrip
+      preAtBoundary = T.null preStrip || T.isSuffixOf "\n" preStrip
+      sufAtBoundary = T.null sufStrip || T.isPrefixOf "\n" sufStrip
+  in if preAtBoundary || sufAtBoundary
+       then preStrip <> sufStrip
+       else if preHadSpace || sufHadSpace
+              then preStrip <> " " <> sufStrip
+              else preStrip <> sufStrip
+
+isSpaceNotNl :: Char -> Bool
+isSpaceNotNl c = Char.isSpace c && c /= '\n'
 
 -- | Normalize the final text: trim trailing whitespace on lines and collapse
 --   three or more consecutive newlines down to two.
