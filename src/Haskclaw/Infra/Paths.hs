@@ -220,15 +220,23 @@ defaultSharedClaudeMd =
   \      agent-browser open <url>\n\
   \    fi\n\
   \\n\
-  \**Saving** — only after the user is visibly authenticated (URL has moved\n\
-  \past the login screen, the account indicator is present, etc.). Save\n\
-  \once per successful login, not on every turn:\n\
+  \**Saving** — on two occasions:\n\
+  \\n\
+  \1. Right after the user becomes visibly authenticated (URL has moved\n\
+  \   past the login screen, the account indicator is present, etc.) so\n\
+  \   later turns can skip the login flow.\n\
+  \2. Immediately before every `close`, so any cookies, tokens, cart\n\
+  \   contents, or settings touched during the turn survive.\n\
+  \\n\
+  \Don't sprinkle saves through the middle of a turn — the two checkpoints\n\
+  \above are enough.\n\
   \\n\
   \    agent-browser state save ./browser-state.json\n\
   \\n\
-  \**Closing** — at the end of a browser task, release the daemon so the\n\
-  \next turn starts from a clean launch:\n\
+  \**Closing** — end the task by saving then releasing the daemon, in that\n\
+  \order:\n\
   \\n\
+  \    agent-browser state save ./browser-state.json\n\
   \    agent-browser close\n\
   \\n\
   \If the user is not yet logged in, walk them through the flow (they\n\
