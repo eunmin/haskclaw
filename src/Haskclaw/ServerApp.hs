@@ -25,7 +25,12 @@ import Haskclaw.Telegram.Command.Domain.Types
   , Message (..)
   , newBotStateWith
   )
-import Haskclaw.Telegram.Command.UseCase.DispatchMessage (dispatch)
+import Haskclaw.Telegram.Command.UseCase.DispatchMessage
+  ( coalesceUserMsgs
+  , dispatch
+  , mergeMessages
+  , runInterruptible
+  )
 import Haskclaw.Telegram.Command.UseCase.PollUpdates (pollOnce)
 import Haskclaw.Telegram.Command.UseCase.ProcessMessage (processMessage)
 import Haskclaw.Util.ChatLog (logChat)
@@ -68,31 +73,54 @@ pollLoop botState cfg = do
 typingIntervalMicros :: Int
 typingIntervalMicros = 4000000
 
+data TurnOutcome = TurnCompleted | TurnInterrupted
+
 chatWorker :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> IO ()
 chatWorker botState manager token cid chan = void $ forkIO $ do
   tid <- myThreadId
   workDir <- ensureChatDir cid
   logChat cid $ "worker started thread=" <> show tid <> " cwd=" <> toText workDir
-  forever $ do
-    task <- atomically $ readTChan chan
-    case task of
-      UserMsg msg ->
-        handleUserMsg botState manager token cid msg
-      ScheduledRun taskId' mLbl promptTxt ->
-        handleScheduled botState manager token cid taskId' mLbl promptTxt
+  workerLoop botState manager token cid chan []
 
-handleUserMsg :: BotState -> Manager -> Text -> ChatId -> Message -> IO ()
-handleUserMsg botState manager token cid msg = do
+workerLoop
+  :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask
+  -> [Message] -> IO ()
+workerLoop botState manager token cid chan carryover = do
+  task <- atomically $ readTChan chan
+  case task of
+    UserMsg m -> do
+      extras <- atomically $ coalesceUserMsgs chan
+      let (firstMsg, restMsgs) = case carryover of
+            []     -> (m, extras)
+            (c:cs) -> (c, cs ++ m : extras)
+          allMsgs = firstMsg : restMsgs
+          merged  = mergeMessages firstMsg restMsgs
+      outcome <- handleUserTurn botState manager token cid chan merged
+      case outcome of
+        TurnCompleted   -> workerLoop botState manager token cid chan []
+        TurnInterrupted -> workerLoop botState manager token cid chan allMsgs
+    ScheduledRun taskId' mLbl promptTxt -> do
+      handleScheduled botState manager token cid taskId' mLbl promptTxt
+      workerLoop botState manager token cid chan carryover
+
+handleUserTurn
+  :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> Message
+  -> IO TurnOutcome
+handleUserTurn botState manager token cid chan msg = do
   let user = fromMaybe "unknown" msg.fromUsername
       content = fromMaybe "" msg.text
   logChat cid $ "received @" <> user <> ": " <> content
   mSessionId <- Map.lookup cid <$> readTVarIO botState.sessions
-  response <- withPeriodic typingIntervalMicros
-    (TelegramGateway.postSendChatAction manager token cid "typing")
-    (runEff $ ClaudeServiceInterpreter.run $ processMessage mSessionId msg)
-  case response of
-    Nothing -> pure ()
-    Just (resp, mNewSessionId) -> do
+  outcome <- runInterruptible chan $
+    withPeriodic typingIntervalMicros
+      (TelegramGateway.postSendChatAction manager token cid "typing")
+      (runEff $ ClaudeServiceInterpreter.run $ processMessage mSessionId msg)
+  case outcome of
+    Left () -> do
+      logChat cid "interrupted by new user message; restarting turn"
+      pure TurnInterrupted
+    Right Nothing -> pure TurnCompleted
+    Right (Just (resp, mNewSessionId)) -> do
       whenJust mNewSessionId $ \newSessionId -> do
         newSessions <- atomically $ do
           modifyTVar' botState.sessions (Map.insert cid newSessionId)
@@ -100,6 +128,7 @@ handleUserMsg botState manager token cid msg = do
         saveSessions newSessions
       logChat cid $ "claude: " <> resp
       TelegramGateway.postSendMessage manager token cid resp
+      pure TurnCompleted
 
 -- | Run a scheduled prompt in a fresh session (no --resume). Always clears
 --   the in-flight marker afterwards. Failures are delivered to the chat.

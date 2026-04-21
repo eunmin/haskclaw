@@ -1,14 +1,28 @@
 module Haskclaw.Telegram.Command.UseCase.DispatchMessage
   ( dispatch
   , dispatchScheduled
+  , coalesceUserMsgs
+  , mergeMessages
+  , runInterruptible
   , TaskHandler
   ) where
 
 import Relude
 
-import Control.Concurrent.STM (TChan, newTChan, writeTChan)
+import Control.Concurrent (forkIO, killThread)
+import Control.Concurrent.STM
+  ( TChan
+  , newTChan
+  , orElse
+  , retry
+  , tryReadTChan
+  , unGetTChan
+  , writeTChan
+  )
+import Control.Exception (bracket, throwIO, try)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import qualified Data.Text as T
 
 import Haskclaw.Telegram.Command.Domain.Types
   ( BotState (..)
@@ -62,3 +76,74 @@ enqueue botState cid task = do
       writeTChan ch task
       modifyTVar' botState.workers (Map.insert cid ch)
       pure (ch, True)
+
+-- | Drain consecutive UserMsg from the head; stop at the first non-UserMsg
+--   (which is put back via unGetTChan) or when the channel is empty.
+coalesceUserMsgs :: TChan ChatTask -> STM [Message]
+coalesceUserMsgs chan = go []
+  where
+    go acc = do
+      mt <- tryReadTChan chan
+      case mt of
+        Nothing -> pure (reverse acc)
+        Just (UserMsg m) -> go (m : acc)
+        Just other -> do
+          unGetTChan chan other
+          pure (reverse acc)
+
+-- | Merge messages into one by joining texts with "\n". First message's
+--   metadata (messageId, chatId, fromUsername) is kept.
+mergeMessages :: Message -> [Message] -> Message
+mergeMessages m [] = m
+mergeMessages m rest = m { text = merged }
+  where
+    texts = mapMaybe (.text) (m : rest)
+    merged = case texts of
+      [] -> Nothing
+      xs -> Just (T.intercalate "\n" xs)
+
+-- | Run @action@ while watching @chan@ for a newly-arriving UserMsg.
+--   Returns @Right@ when the action completes, @Left ()@ when interrupted.
+--   The interrupting UserMsg is left in the queue for the caller to handle.
+--   Rethrows any synchronous exception raised by @action@.
+runInterruptible :: TChan ChatTask -> IO a -> IO (Either () a)
+runInterruptible chan action = do
+  resultVar <- newEmptyTMVarIO
+  bracket
+    (forkIO $ do
+       r <- try @SomeException action
+       atomically $ putTMVar resultVar r)
+    killThread
+    (\_tid -> do
+       winner <- atomically $
+         (Right <$> takeTMVar resultVar)
+         `orElse`
+         (peekUserMsgArrival chan >> pure (Left ()))
+       case winner of
+         Right (Right val) -> pure (Right val)
+         Right (Left exc)  -> throwIO exc
+         Left ()           -> pure (Left ()))
+
+-- | STM action that succeeds once a UserMsg is present in @chan@. Drains and
+--   restores the queue on every attempt so the transaction subscribes to tail
+--   writes as well — @peekTChan@ alone only sees head changes and would miss a
+--   UserMsg appended behind a ScheduledRun.
+peekUserMsgArrival :: TChan ChatTask -> STM ()
+peekUserMsgArrival chan = do
+  tasks <- drainRestore chan
+  unless (any isUserTask tasks) retry
+  where
+    isUserTask (UserMsg _) = True
+    isUserTask _ = False
+
+drainRestore :: TChan ChatTask -> STM [ChatTask]
+drainRestore chan = do
+  ts <- go []
+  mapM_ (unGetTChan chan) ts
+  pure (reverse ts)
+  where
+    go acc = do
+      mt <- tryReadTChan chan
+      case mt of
+        Nothing -> pure acc
+        Just t  -> go (t : acc)

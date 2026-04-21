@@ -1,4 +1,4 @@
-cabal-version: 2.2
+cabal-version: 1.12
 
 -- This file has been generated from package.yaml by hpack version 0.38.1.
 --
@@ -46,8 +46,6 @@ library
       Haskclaw.Util.ChatLog
       Haskclaw.Util.Periodic
   other-modules:
-      Paths_haskclaw
-  autogen-modules:
       Paths_haskclaw
   hs-source-dirs:
       src
@@ -106,8 +104,6 @@ executable haskclaw-exe
   main-is: Main.hs
   other-modules:
       Paths_haskclaw
-  autogen-modules:
-      Paths_haskclaw
   hs-source-dirs:
       app
   default-extensions:
@@ -165,8 +161,6 @@ executable haskclaw-exe
 executable haskclaw-mcp
   main-is: Main.hs
   other-modules:
-      Paths_haskclaw
-  autogen-modules:
       Paths_haskclaw
   hs-source-dirs:
       mcp
@@ -238,8 +232,6 @@ test-suite haskclaw-test
       Haskclaw.Unit.Telegram.Infra.Gateway.ClaudeProcessGatewaySpec
       Haskclaw.Unit.Util.ChatLogSpec
       Haskclaw.Unit.Util.PeriodicSpec
-      Paths_haskclaw
-  autogen-modules:
       Paths_haskclaw
   hs-source-dirs:
       test
