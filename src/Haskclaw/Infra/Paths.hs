@@ -197,19 +197,43 @@ defaultSharedClaudeMd =
   \   delivers it to the user.\n\
   \7. `agent-browser close` — release the browser when done.\n\
   \\n\
-  \### Persistent login (per-chat)\n\
+  \### Per-chat isolation and persistent login\n\
   \\n\
-  \Reuse authenticated sessions by saving storage state to\n\
-  \`./browser-state.json` in the current working directory (the chat's\n\
-  \project root — this file is writable and readable):\n\
+  \**Do not set `AGENT_BROWSER_SESSION`.** The bot already injects it so\n\
+  \every agent-browser invocation in this chat routes to a daemon that is\n\
+  \isolated from other chats. Concurrent chats can use the browser without\n\
+  \colliding.\n\
   \\n\
-  \    agent-browser state save ./browser-state.json     # after a successful login\n\
-  \    agent-browser state load ./browser-state.json     # on a later turn, before `open`\n\
+  \Cookies and localStorage are persisted in a per-chat JSON file at\n\
+  \`./browser-state.json` (relative to the current working directory, which\n\
+  \is the chat's project root).\n\
   \\n\
-  \If the user is not yet logged in, walk them through the login flow (fill\n\
-  \credentials they provide, click submit, wait for the dashboard URL) and\n\
-  \save the state once authenticated. On the next browser task, load the\n\
-  \state before navigating so cookies and localStorage are restored.\n\
+  \**Launching with saved state** — pass `--state` on the first `open` of\n\
+  \the turn, and only if the file exists. Close any stale daemon first so\n\
+  \the load actually takes effect (agent-browser refuses `--state` on a\n\
+  \running browser):\n\
+  \\n\
+  \    agent-browser close\n\
+  \    if [ -f ./browser-state.json ]; then\n\
+  \      agent-browser --state ./browser-state.json open <url>\n\
+  \    else\n\
+  \      agent-browser open <url>\n\
+  \    fi\n\
+  \\n\
+  \**Saving** — only after the user is visibly authenticated (URL has moved\n\
+  \past the login screen, the account indicator is present, etc.). Save\n\
+  \once per successful login, not on every turn:\n\
+  \\n\
+  \    agent-browser state save ./browser-state.json\n\
+  \\n\
+  \**Closing** — at the end of a browser task, release the daemon so the\n\
+  \next turn starts from a clean launch:\n\
+  \\n\
+  \    agent-browser close\n\
+  \\n\
+  \If the user is not yet logged in, walk them through the flow (they\n\
+  \provide credentials; you `fill` and `click`), wait for the post-login\n\
+  \URL, then save state.\n\
   \\n\
   \### Tips\n\
   \\n\

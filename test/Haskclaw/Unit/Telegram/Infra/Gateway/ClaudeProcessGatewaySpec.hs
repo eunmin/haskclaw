@@ -7,10 +7,11 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Haskclaw.Telegram.Command.Domain.Types (SessionId (..))
+import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
 import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
   ( ContentBlock (..)
   , StreamEvent (..)
+  , buildClaudeEnv
   , parseStreamLine
   )
 
@@ -18,89 +19,119 @@ encodeStrict :: Aeson.Value -> ByteString
 encodeStrict = LBS.toStrict . Aeson.encode
 
 spec :: Spec
-spec = describe "parseStreamLine" $ do
-  it "extracts session_id and model from a system/init event" $ do
-    let line = encodeStrict $ object
-          [ "type" .= ("system" :: Text)
-          , "subtype" .= ("init" :: Text)
-          , "session_id" .= ("abc-123" :: Text)
-          , "model" .= ("claude-opus-4-7" :: Text)
-          ]
-    parseStreamLine line
-      `shouldBe` Right (EvSystemInit (SessionId "abc-123") (Just "claude-opus-4-7"))
+spec = do
+  describe "buildClaudeEnv" $ do
+    it "appends AGENT_BROWSER_SESSION with the chat slug to an empty base" $
+      buildClaudeEnv (ChatId 42) []
+        `shouldBe` [("AGENT_BROWSER_SESSION", "42")]
 
-  it "parses tool_use blocks inside assistant.message" $ do
-    let line = encodeStrict $ object
-          [ "type" .= ("assistant" :: Text)
-          , "message" .= object
-              [ "content" .= [ object
-                  [ "type" .= ("tool_use" :: Text)
-                  , "name" .= ("Bash" :: Text)
-                  , "input" .= object [ "command" .= ("ls" :: Text) ]
+    it "prefixes negative chat ids with neg_ to match the chat directory" $
+      buildClaudeEnv (ChatId (-7)) []
+        `shouldBe` [("AGENT_BROWSER_SESSION", "neg_7")]
+
+    it "preserves unrelated entries in their original order" $
+      buildClaudeEnv (ChatId 1) [("HOME", "/h"), ("PATH", "/bin")]
+        `shouldBe`
+          [ ("HOME", "/h")
+          , ("PATH", "/bin")
+          , ("AGENT_BROWSER_SESSION", "1")
+          ]
+
+    it "overrides an existing AGENT_BROWSER_SESSION instead of duplicating it" $ do
+      let result = buildClaudeEnv (ChatId 99)
+            [ ("HOME", "/h")
+            , ("AGENT_BROWSER_SESSION", "stale")
+            , ("PATH", "/bin")
+            ]
+      result `shouldBe`
+        [ ("HOME", "/h")
+        , ("PATH", "/bin")
+        , ("AGENT_BROWSER_SESSION", "99")
+        ]
+
+  describe "parseStreamLine" $ do
+    it "extracts session_id and model from a system/init event" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("system" :: Text)
+            , "subtype" .= ("init" :: Text)
+            , "session_id" .= ("abc-123" :: Text)
+            , "model" .= ("claude-opus-4-7" :: Text)
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvSystemInit (SessionId "abc-123") (Just "claude-opus-4-7"))
+
+    it "parses tool_use blocks inside assistant.message" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("assistant" :: Text)
+            , "message" .= object
+                [ "content" .= [ object
+                    [ "type" .= ("tool_use" :: Text)
+                    , "name" .= ("Bash" :: Text)
+                    , "input" .= object [ "command" .= ("ls" :: Text) ]
+                    ]
                   ]
                 ]
-              ]
-          ]
-    case parseStreamLine line of
-      Right (EvAssistant [CbToolUse name _input]) -> name `shouldBe` "Bash"
-      other -> fail $ "unexpected: " <> show other
+            ]
+      case parseStreamLine line of
+        Right (EvAssistant [CbToolUse name _input]) -> name `shouldBe` "Bash"
+        other -> fail $ "unexpected: " <> show other
 
-  it "parses text blocks inside assistant.message" $ do
-    let line = encodeStrict $ object
-          [ "type" .= ("assistant" :: Text)
-          , "message" .= object
-              [ "content" .= [ object
-                  [ "type" .= ("text" :: Text), "text" .= ("hello" :: Text) ]
-                ]
-              ]
-          ]
-    parseStreamLine line
-      `shouldBe` Right (EvAssistant [CbText "hello"])
-
-  it "parses tool_result with a plain string content inside user.message" $ do
-    let line = encodeStrict $ object
-          [ "type" .= ("user" :: Text)
-          , "message" .= object
-              [ "content" .= [ object
-                  [ "type" .= ("tool_result" :: Text)
-                  , "content" .= ("output text" :: Text)
+    it "parses text blocks inside assistant.message" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("assistant" :: Text)
+            , "message" .= object
+                [ "content" .= [ object
+                    [ "type" .= ("text" :: Text), "text" .= ("hello" :: Text) ]
                   ]
                 ]
-              ]
-          ]
-    parseStreamLine line
-      `shouldBe` Right (EvUser [CbToolResult "output text"])
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvAssistant [CbText "hello"])
 
-  it "joins tool_result content arrays of {type:text,text:...} into a single string" $ do
-    let line = encodeStrict $ object
-          [ "type" .= ("user" :: Text)
-          , "message" .= object
-              [ "content" .= [ object
-                  [ "type" .= ("tool_result" :: Text)
-                  , "content" .=
-                      [ object [ "type" .= ("text" :: Text), "text" .= ("line1" :: Text) ]
-                      , object [ "type" .= ("text" :: Text), "text" .= ("line2" :: Text) ]
-                      ]
+    it "parses tool_result with a plain string content inside user.message" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("user" :: Text)
+            , "message" .= object
+                [ "content" .= [ object
+                    [ "type" .= ("tool_result" :: Text)
+                    , "content" .= ("output text" :: Text)
+                    ]
                   ]
                 ]
-              ]
-          ]
-    parseStreamLine line
-      `shouldBe` Right (EvUser [CbToolResult "line1\nline2"])
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvUser [CbToolResult "output text"])
 
-  it "extracts the final text and session_id from a result event" $ do
-    let line = encodeStrict $ object
-          [ "type" .= ("result" :: Text)
-          , "result" .= ("final answer" :: Text)
-          , "session_id" .= ("xyz-789" :: Text)
-          , "is_error" .= False
-          ]
-    parseStreamLine line
-      `shouldBe` Right (EvResult "final answer" (Just (SessionId "xyz-789")) False)
+    it "joins tool_result content arrays of {type:text,text:...} into a single string" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("user" :: Text)
+            , "message" .= object
+                [ "content" .= [ object
+                    [ "type" .= ("tool_result" :: Text)
+                    , "content" .=
+                        [ object [ "type" .= ("text" :: Text), "text" .= ("line1" :: Text) ]
+                        , object [ "type" .= ("text" :: Text), "text" .= ("line2" :: Text) ]
+                        ]
+                    ]
+                  ]
+                ]
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvUser [CbToolResult "line1\nline2"])
 
-  it "falls back to EvOther for unknown event types" $ do
-    let line = encodeStrict $ object [ "type" .= ("mystery" :: Text) ]
-    parseStreamLine line `shouldBe` Right (EvOther "mystery")
+    it "extracts the final text and session_id from a result event" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("result" :: Text)
+            , "result" .= ("final answer" :: Text)
+            , "session_id" .= ("xyz-789" :: Text)
+            , "is_error" .= False
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvResult "final answer" (Just (SessionId "xyz-789")) False)
 
-  it "fails with Left for non-JSON input" $
-    parseStreamLine "not json" `shouldSatisfy` isLeft
+    it "falls back to EvOther for unknown event types" $ do
+      let line = encodeStrict $ object [ "type" .= ("mystery" :: Text) ]
+      parseStreamLine line `shouldBe` Right (EvOther "mystery")
+
+    it "fails with Left for non-JSON input" $
+      parseStreamLine "not json" `shouldSatisfy` isLeft

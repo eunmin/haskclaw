@@ -1,6 +1,7 @@
 module Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
   ( callClaude
   , parseStreamLine
+  , buildClaudeEnv
   , StreamEvent (..)
   , ContentBlock (..)
   ) where
@@ -13,6 +14,7 @@ import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import qualified System.IO as SIO
 import System.Process.Typed
@@ -22,6 +24,7 @@ import System.Process.Typed
   , getStderr
   , getStdout
   , proc
+  , setEnv
   , setStderr
   , setStdin
   , setStdout
@@ -30,7 +33,7 @@ import System.Process.Typed
   , withProcessWait
   )
 
-import Haskclaw.Infra.Paths (chatMcpJsonPath, ensureChatConfig, ensureChatDir)
+import Haskclaw.Infra.Paths (chatIdSlug, chatMcpJsonPath, ensureChatConfig, ensureChatDir)
 import Haskclaw.Telegram.Command.Domain.Types (ChatId, SessionId (..))
 import Haskclaw.Util.ChatLog (logChat)
 
@@ -59,6 +62,7 @@ runStreamingClaude
   -> IO (Either Text (Text, SessionId))
 runStreamingClaude cid workDir mSessionId input = do
   mcpJson <- chatMcpJsonPath cid
+  baseEnv <- getEnvironment
   let args = ["-p", "--output-format", "stream-json", "--verbose"
              , "--mcp-config", mcpJson, "--strict-mcp-config"
              ]
@@ -70,6 +74,7 @@ runStreamingClaude cid workDir mSessionId input = do
         setStdout createPipe
           $ setStderr createPipe
           $ setWorkingDir workDir
+          $ setEnv (buildClaudeEnv cid baseEnv)
           $ setStdin (byteStringInput (encodeUtf8 input))
           $ proc "claude" args
   (exit, mFinal, errText) <- withProcessWait process $ \p -> do
@@ -100,6 +105,18 @@ handleLine cid line ref = case parseStreamLine line of
     logChat cid $ "stream parse error: " <> toText err
       <> " line=" <> truncText 200 (decodeUtf8 line)
   Right ev -> renderEvent cid ev ref
+
+-- | Augment the inherited process environment with per-chat variables the
+--   subprocess expects. Currently sets @AGENT_BROWSER_SESSION@ to the chat's
+--   directory slug so agent-browser daemons remain isolated across chats.
+--   Any existing entry for the same key is overwritten; all other entries are
+--   preserved in their original order.
+buildClaudeEnv :: ChatId -> [(String, String)] -> [(String, String)]
+buildClaudeEnv cid base =
+  let key = "AGENT_BROWSER_SESSION"
+      value = chatIdSlug cid
+      stripped = filter (\(k, _) -> k /= key) base
+  in stripped <> [(key, value)]
 
 -- ===== Stream event model =====
 
