@@ -115,27 +115,29 @@ handleUserTurn botState manager token cid chan msg = do
       content = fromMaybe "" msg.text
   logChat cid $ "received @" <> user <> ": " <> content
   mSessionId <- Map.lookup cid <$> readTVarIO botState.sessions
+  let sink = deliverReply manager token
   outcome <- runInterruptible chan $
     withPeriodic typingIntervalMicros
       (TelegramGateway.postSendChatAction manager token cid "typing")
-      (runEff $ ClaudeServiceInterpreter.run $ processMessage mSessionId msg)
+      (runEff $ ClaudeServiceInterpreter.run sink $ processMessage mSessionId msg)
   case outcome of
     Left () -> do
       logChat cid "interrupted by new user message; restarting turn"
       pure TurnInterrupted
     Right Nothing -> pure TurnCompleted
-    Right (Just (resp, mNewSessionId)) -> do
+    Right (Just mNewSessionId) -> do
       whenJust mNewSessionId $ \newSessionId -> do
         newSessions <- atomically $ do
           modifyTVar' botState.sessions (Map.insert cid newSessionId)
           readTVar botState.sessions
         saveSessions newSessions
-      logChat cid $ "claude: " <> resp
-      deliverReply manager token cid resp
       pure TurnCompleted
 
 -- | Run a scheduled prompt in a fresh session (no --resume). Always clears
 --   the in-flight marker afterwards. Failures are delivered to the chat.
+--   Unlike user turns, scheduled runs buffer the streamed text and emit a
+--   single message at the end so the @[label]@ prefix stays attached to
+--   the delivered content.
 handleScheduled
   :: BotState -> Manager -> Text
   -> ChatId -> Text -> Maybe Text -> Text
@@ -143,17 +145,20 @@ handleScheduled
 handleScheduled botState manager token cid tid mLabel promptTxt = do
   let labelTag = maybe "" (\l -> "[" <> l <> "] ") mLabel
   logChat cid $ "scheduled run " <> tid <> " " <> labelTag <> "start"
-  (resp, mSid) <- withPeriodic typingIntervalMicros
+  bufRef <- newIORef ([] :: [Text])
+  let sink _ piece = modifyIORef' bufRef (piece :)
+  mSid <- withPeriodic typingIntervalMicros
     (TelegramGateway.postSendChatAction manager token cid "typing")
-    (runEff $ ClaudeServiceInterpreter.run $ askClaude cid Nothing promptTxt)
+    (runEff $ ClaudeServiceInterpreter.run sink $ askClaude cid Nothing promptTxt)
+  body <- T.intercalate "\n\n" . reverse <$> readIORef bufRef
   case mSid of
     Just _ -> do
       logChat cid $ "scheduled run " <> tid <> " ok"
-      deliverReply manager token cid (labelTag <> resp)
+      deliverReply manager token cid (labelTag <> body)
     Nothing -> do
       logChat cid $ "scheduled run " <> tid <> " failed"
       TelegramGateway.postSendMessage manager token cid
-        ("[scheduled task failed] " <> labelTag <> resp)
+        ("[scheduled task failed] " <> labelTag <> body)
   clearInFlight botState cid tid
 
 -- | Split a Claude reply into inline images and residual text. Images are sent

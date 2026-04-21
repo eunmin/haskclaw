@@ -3,7 +3,7 @@ module Haskclaw.Unit.Telegram.Command.UseCase.ProcessMessageSpec (spec) where
 import Relude
 
 import Effectful (runEff)
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), Message (..), SessionId (..))
 import Haskclaw.Telegram.Command.UseCase.ProcessMessage (processMessage)
@@ -11,7 +11,7 @@ import qualified Haskclaw.Unit.Telegram.Command.InMemoryClaudeService as InMemor
 
 spec :: Spec
 spec = describe "ProcessMessage.processMessage" $ do
-  it "returns Claude's response and session id for a text message" $ do
+  it "returns the session id produced by Claude for a text message" $ do
     let msg = Message
           { messageId = 1
           , chatId = ChatId 42
@@ -19,17 +19,33 @@ spec = describe "ProcessMessage.processMessage" $ do
           , fromUsername = Just "testuser"
           }
     result <- runEff $ InMemoryClaudeService.run $ processMessage Nothing msg
-    result `shouldBe` Just ("echo: hello", Just (SessionId "test-session-id"))
+    result `shouldBe` Just (Just (SessionId "test-session-id"))
 
-  it "returns Nothing for a message without text" $ do
-    let msg = Message
+  it "streams assistant text through the provided sink" $ do
+    bufRef <- newIORef ([] :: [(ChatId, Text)])
+    let sink cid txt = modifyIORef' bufRef ((cid, txt) :)
+        msg = Message
+          { messageId = 1
+          , chatId = ChatId 42
+          , text = Just "hello"
+          , fromUsername = Nothing
+          }
+    _ <- runEff $ InMemoryClaudeService.runWithSink sink $ processMessage Nothing msg
+    streamed <- reverse <$> readIORef bufRef
+    streamed `shouldBe` [(ChatId 42, "echo: hello")]
+
+  it "returns Nothing for a message without text and skips the sink" $ do
+    bufRef <- newIORef ([] :: [(ChatId, Text)])
+    let sink cid txt = modifyIORef' bufRef ((cid, txt) :)
+        msg = Message
           { messageId = 1
           , chatId = ChatId 42
           , text = Nothing
           , fromUsername = Nothing
           }
-    result <- runEff $ InMemoryClaudeService.run $ processMessage Nothing msg
+    result <- runEff $ InMemoryClaudeService.runWithSink sink $ processMessage Nothing msg
     result `shouldBe` Nothing
+    readIORef bufRef `shouldReturn` ([] :: [(ChatId, Text)])
 
   it "forwards the given session id to Claude" $ do
     let msg = Message
@@ -39,4 +55,4 @@ spec = describe "ProcessMessage.processMessage" $ do
           , fromUsername = Nothing
           }
     result <- runEff $ InMemoryClaudeService.run $ processMessage (Just (SessionId "prev-session")) msg
-    result `shouldBe` Just ("echo: follow up", Just (SessionId "test-session-id"))
+    result `shouldBe` Just (Just (SessionId "test-session-id"))

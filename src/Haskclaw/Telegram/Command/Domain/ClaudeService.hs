@@ -10,9 +10,10 @@ import Effectful.TH (makeEffect)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId, SessionId)
 
--- | Returns Claude's response together with the new session id.
---   SessionId is Nothing when no session was created (e.g. on error).
+-- | Submit the user's input to Claude. Assistant-facing text is delivered
+--   through the sink registered when interpreting this effect; the handler
+--   only returns the new session id (Nothing on error or a missing session).
 data ClaudeService :: Effect where
-  AskClaude :: ChatId -> Maybe SessionId -> Text -> ClaudeService m (Text, Maybe SessionId)
+  AskClaude :: ChatId -> Maybe SessionId -> Text -> ClaudeService m (Maybe SessionId)
 
 makeEffect ''ClaudeService

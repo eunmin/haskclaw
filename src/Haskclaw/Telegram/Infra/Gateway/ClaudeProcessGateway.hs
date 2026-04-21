@@ -37,33 +37,46 @@ import Haskclaw.Infra.Paths (chatIdSlug, chatMcpJsonPath, ensureChatConfig, ensu
 import Haskclaw.Telegram.Command.Domain.Types (ChatId, SessionId (..))
 import Haskclaw.Util.ChatLog (logChat)
 
--- | Public entry point. Signature is stable across the streaming rewrite.
-callClaude :: ChatId -> Maybe SessionId -> Text -> IO (Either Text (Text, SessionId))
-callClaude cid mSessionId input = do
+-- | Public entry point. The @sink@ callback receives each assistant text
+--   block as it streams in from @claude -p@. Callers wire it to their
+--   transport (e.g. Telegram sendMessage) to get tool-use narration in
+--   real time. On session-missing retry the sink is reused as-is.
+callClaude
+  :: (Text -> IO ())
+  -> ChatId
+  -> Maybe SessionId
+  -> Text
+  -> IO (Either Text SessionId)
+callClaude sink cid mSessionId input = do
   workDir <- ensureChatDir cid
   _ <- ensureChatConfig cid
   let effectiveSid = case mSessionId of
         Just (SessionId "") -> Nothing
         other -> other
-  firstAttempt <- runStreamingClaude cid workDir effectiveSid input
+  firstAttempt <- runStreamingClaude sink cid workDir effectiveSid input
   case firstAttempt of
     Right resp -> pure (Right resp)
     Left err
       | isSessionMissing err, isJust effectiveSid -> do
           logChat cid $ "session not found, retrying fresh: " <> err
-          runStreamingClaude cid workDir Nothing input
+          runStreamingClaude sink cid workDir Nothing input
       | otherwise -> pure (Left err)
 
 runStreamingClaude
-  :: ChatId
+  :: (Text -> IO ())
+  -> ChatId
   -> FilePath
   -> Maybe SessionId
   -> Text
-  -> IO (Either Text (Text, SessionId))
-runStreamingClaude cid workDir mSessionId input = do
+  -> IO (Either Text SessionId)
+runStreamingClaude rawSink cid workDir mSessionId input = do
   mcpJson <- chatMcpJsonPath cid
   baseEnv <- getEnvironment
-  let args = ["-p", "--output-format", "stream-json", "--verbose"
+  sentRef <- newIORef False
+  let sink t = do
+        writeIORef sentRef True
+        rawSink t
+      args = ["-p", "--output-format", "stream-json", "--verbose"
              , "--mcp-config", mcpJson, "--strict-mcp-config"
              ]
            <> case mSessionId of
@@ -79,32 +92,40 @@ runStreamingClaude cid workDir mSessionId input = do
           $ proc "claude" args
   (exit, mFinal, errText) <- withProcessWait process $ \p -> do
     resultRef <- newIORef Nothing
-    readLoop cid (getStdout p) resultRef
+    readLoop sink cid (getStdout p) resultRef
     errBytes <- BS.hGetContents (getStderr p)
     code <- waitExitCode p
     final <- readIORef resultRef
     pure (code, final, decodeUtf8 errBytes :: Text)
   case (exit, mFinal) of
-    (ExitSuccess, Just (txt, sid)) -> pure (Right (txt, sid))
+    (ExitSuccess, Just (txt, sid)) -> do
+      sent <- readIORef sentRef
+      unless (sent || T.null (T.strip txt)) $ rawSink txt
+      pure (Right sid)
     (ExitSuccess, Nothing) -> pure (Left "stream ended without a result event")
     (ExitFailure code, _) -> pure $ Left $
       "claude process failed (exit " <> show code <> "): " <> errText
 
 -- | Read stdout line by line, decode each event, log to console, and capture the final result.
-readLoop :: ChatId -> Handle -> IORef (Maybe (Text, SessionId)) -> IO ()
-readLoop cid h ref = do
+readLoop :: (Text -> IO ()) -> ChatId -> Handle -> IORef (Maybe (Text, SessionId)) -> IO ()
+readLoop sink cid h ref = do
   eof <- SIO.hIsEOF h
   unless eof $ do
     line <- BS8.hGetLine h
-    handleLine cid line ref
-    readLoop cid h ref
+    handleLine sink cid line ref
+    readLoop sink cid h ref
 
-handleLine :: ChatId -> ByteString -> IORef (Maybe (Text, SessionId)) -> IO ()
-handleLine cid line ref = case parseStreamLine line of
+handleLine
+  :: (Text -> IO ())
+  -> ChatId
+  -> ByteString
+  -> IORef (Maybe (Text, SessionId))
+  -> IO ()
+handleLine sink cid line ref = case parseStreamLine line of
   Left err ->
     logChat cid $ "stream parse error: " <> toText err
       <> " line=" <> truncText 200 (decodeUtf8 line)
-  Right ev -> renderEvent cid ev ref
+  Right ev -> renderEvent sink cid ev ref
 
 -- | Augment the inherited process environment with per-chat variables the
 --   subprocess expects. Currently sets @AGENT_BROWSER_SESSION@ to the chat's
@@ -187,12 +208,17 @@ renderToolResult v = decodeUtf8 (toStrict (encode v))
 
 -- ===== Console rendering =====
 
-renderEvent :: ChatId -> StreamEvent -> IORef (Maybe (Text, SessionId)) -> IO ()
-renderEvent cid ev ref = case ev of
+renderEvent
+  :: (Text -> IO ())
+  -> ChatId
+  -> StreamEvent
+  -> IORef (Maybe (Text, SessionId))
+  -> IO ()
+renderEvent sink cid ev ref = case ev of
   EvSystemInit sid mModel ->
     logChat cid $ "system.init model=" <> fromMaybe "?" mModel
       <> " session=" <> unSid sid
-  EvAssistant blocks -> forM_ blocks (renderAssistantBlock cid)
+  EvAssistant blocks -> forM_ blocks (renderAssistantBlock sink cid)
   EvUser blocks -> forM_ blocks (renderUserBlock cid)
   EvResult txt mSid isErr -> do
     logChat cid $ "result is_error=" <> show isErr
@@ -200,9 +226,11 @@ renderEvent cid ev ref = case ev of
     whenJust mSid $ \sid -> writeIORef ref (Just (txt, sid))
   EvOther ty -> logChat cid $ "event=" <> ty
 
-renderAssistantBlock :: ChatId -> ContentBlock -> IO ()
-renderAssistantBlock cid = \case
-  CbText t -> logChat cid $ "assistant: " <> truncText 500 t
+renderAssistantBlock :: (Text -> IO ()) -> ChatId -> ContentBlock -> IO ()
+renderAssistantBlock sink cid = \case
+  CbText t -> do
+    logChat cid $ "assistant: " <> truncText 500 t
+    sink t
   CbToolUse name input ->
     logChat cid $ "tool_use " <> name <> " "
       <> truncText 300 (decodeUtf8 (toStrict (encode input)))
