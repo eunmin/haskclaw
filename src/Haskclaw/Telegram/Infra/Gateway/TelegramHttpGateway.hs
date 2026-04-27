@@ -2,6 +2,7 @@ module Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway
   ( fetchUpdates
   , fetchMe
   , postSendMessage
+  , postSendHtml
   , postSendChatAction
   , postSendPhoto
   , buildMultipartBody
@@ -81,6 +82,30 @@ postSendMessage manager token (ChatId cid) text = do
   unless (statusIsSuccessful (responseStatus resp)) $
     putTextLn $ "sendMessage error: " <> show (responseStatus resp)
       <> " " <> decodeUtf8 (toStrict (responseBody resp))
+
+-- | Send a message with @parse_mode=HTML@. Returns 'True' iff Telegram
+--   accepted the request. Errors are logged (so the caller can fall back
+--   to plain text on 'False') but not raised.
+postSendHtml :: Manager -> Text -> ChatId -> Text -> IO Bool
+postSendHtml manager token (ChatId cid) html = do
+  let url = "https://api.telegram.org/bot" <> toString token <> "/sendMessage"
+      body = encode $ object
+        [ "chat_id" .= cid
+        , "text" .= html
+        , "parse_mode" .= ("HTML" :: Text)
+        ]
+  req <- parseRequest url
+  let req' = req
+        { method = "POST"
+        , requestBody = RequestBodyLBS body
+        , requestHeaders = [("Content-Type", "application/json")]
+        }
+  resp <- httpLbs req' manager
+  let ok = statusIsSuccessful (responseStatus resp)
+  unless ok $
+    putTextLn $ "sendMessage(HTML) error: " <> show (responseStatus resp)
+      <> " " <> decodeUtf8 (toStrict (responseBody resp))
+  pure ok
 
 postSendChatAction :: Manager -> Text -> ChatId -> Text -> IO ()
 postSendChatAction manager token (ChatId cid) action = do

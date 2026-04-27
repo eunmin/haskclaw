@@ -49,6 +49,7 @@ import Haskclaw.Telegram.Command.UseCase.ProcessMessage (processMessage)
 import Haskclaw.Util.ChatLog (logChat)
 import Haskclaw.Util.MarkdownImage (InlineImage (..), extractImages)
 import Haskclaw.Util.Periodic (withPeriodic)
+import Haskclaw.Util.TelegramHtml (toTelegramHtml)
 import qualified Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway as TelegramGateway
 import qualified Haskclaw.Telegram.Infra.Interpreter.ClaudeServiceInterpreter as ClaudeServiceInterpreter
 import Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter (TelegramConfig (..))
@@ -182,7 +183,7 @@ handleScheduled claudeOpts botState manager token cid tid mLabel promptTxt = do
       deliverReply manager token cid (labelTag <> body)
     Nothing -> do
       logChat cid $ "scheduled run " <> tid <> " failed"
-      TelegramGateway.postSendMessage manager token cid
+      sendTextRich manager token cid
         ("[scheduled task failed] " <> labelTag <> body)
   clearInFlight botState cid tid
 
@@ -204,4 +205,15 @@ deliverReply manager token cid reply = do
         logChat cid $ "image path check failed: " <> toText (show err :: String)
   let trimmed = T.strip cleaned
   unless (T.null trimmed) $
-    TelegramGateway.postSendMessage manager token cid trimmed
+    sendTextRich manager token cid trimmed
+
+-- | Try to deliver @markdown@ as Telegram HTML; on failure (e.g. an entity
+--   we did not expect, or a URL Telegram rejects) fall back to a plain-text
+--   send so the user still receives the message.
+sendTextRich :: Manager -> Text -> ChatId -> Text -> IO ()
+sendTextRich manager token cid markdown = do
+  let html = toTelegramHtml markdown
+  ok <- TelegramGateway.postSendHtml manager token cid html
+  unless ok $ do
+    logChat cid "HTML send rejected; retrying as plain text"
+    TelegramGateway.postSendMessage manager token cid markdown

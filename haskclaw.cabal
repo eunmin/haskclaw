@@ -48,6 +48,7 @@ library
       Haskclaw.Util.ChatLog
       Haskclaw.Util.MarkdownImage
       Haskclaw.Util.Periodic
+      Haskclaw.Util.TelegramHtml
   other-modules:
       Paths_haskclaw
   hs-source-dirs:
@@ -239,6 +240,7 @@ test-suite haskclaw-test
       Haskclaw.Unit.Util.ChatLogSpec
       Haskclaw.Unit.Util.MarkdownImageSpec
       Haskclaw.Unit.Util.PeriodicSpec
+      Haskclaw.Unit.Util.TelegramHtmlSpec
       Paths_haskclaw
   hs-source-dirs:
       test
