@@ -3,8 +3,10 @@ module Haskclaw.Telegram.Command.Domain.Types
   , UpdateId (..)
   , SessionId (..)
   , Message (..)
+  , MessageEntity (..)
   , Update (..)
   , GetUpdatesResponse (..)
+  , GetMeResponse (..)
   , ChatTask (..)
   , BotState (..)
   , newBotState
@@ -53,11 +55,27 @@ newtype SessionId = SessionId Text
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromJSON, ToJSON)
 
+data MessageEntity = MessageEntity
+  { entityType :: Text
+  , entityOffset :: Int
+  , entityLength :: Int
+  } deriving stock (Show, Eq)
+
+instance FromJSON MessageEntity where
+  parseJSON = withObject "MessageEntity" $ \v -> do
+    entityType <- v .: "type"
+    entityOffset <- v .: "offset"
+    entityLength <- v .: "length"
+    pure MessageEntity{..}
+
 data Message = Message
   { messageId :: Int64
   , chatId :: ChatId
+  , chatType :: Text
   , text :: Maybe Text
   , fromUsername :: Maybe Text
+  , entities :: [MessageEntity]
+  , replyToFromUsername :: Maybe Text
   } deriving stock (Show, Eq)
 
 instance FromJSON Message where
@@ -65,11 +83,21 @@ instance FromJSON Message where
     messageId <- v .: "message_id"
     chat <- v .: "chat"
     chatId <- chat .: "id"
+    chatType <- chat .: "type"
     text <- v .:? "text"
     from <- v .:? "from"
     fromUsername <- case from of
       Nothing -> pure Nothing
       Just f -> f .:? "username"
+    entities <- fromMaybe [] <$> v .:? "entities"
+    replyTo <- v .:? "reply_to_message"
+    replyToFromUsername <- case replyTo of
+      Nothing -> pure Nothing
+      Just rt -> do
+        rtFrom <- rt .:? "from"
+        case rtFrom of
+          Nothing -> pure Nothing
+          Just f -> f .:? "username"
     pure Message{..}
 
 data Update = Update
@@ -91,3 +119,13 @@ instance FromJSON GetUpdatesResponse where
   parseJSON = withObject "GetUpdatesResponse" $ \v -> do
     result <- v .: "result"
     pure GetUpdatesResponse{..}
+
+newtype GetMeResponse = GetMeResponse
+  { username :: Maybe Text
+  } deriving stock (Show, Eq)
+
+instance FromJSON GetMeResponse where
+  parseJSON = withObject "GetMeResponse" $ \v -> do
+    res <- v .: "result"
+    username <- res .:? "username"
+    pure GetMeResponse{..}

@@ -37,6 +37,7 @@ library
       Haskclaw.Telegram.Command.Domain.TelegramApi
       Haskclaw.Telegram.Command.Domain.Types
       Haskclaw.Telegram.Command.UseCase.DispatchMessage
+      Haskclaw.Telegram.Command.UseCase.MentionFilter
       Haskclaw.Telegram.Command.UseCase.PollUpdates
       Haskclaw.Telegram.Command.UseCase.ProcessMessage
       Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
@@ -228,6 +229,7 @@ test-suite haskclaw-test
       Haskclaw.Unit.Telegram.Command.InMemoryClaudeService
       Haskclaw.Unit.Telegram.Command.InMemoryTelegramApi
       Haskclaw.Unit.Telegram.Command.UseCase.DispatchMessageSpec
+      Haskclaw.Unit.Telegram.Command.UseCase.MentionFilterSpec
       Haskclaw.Unit.Telegram.Command.UseCase.PollUpdatesSpec
       Haskclaw.Unit.Telegram.Command.UseCase.ProcessMessageSpec
       Haskclaw.Unit.Telegram.Infra.Gateway.ClaudeProcessGatewaySpec

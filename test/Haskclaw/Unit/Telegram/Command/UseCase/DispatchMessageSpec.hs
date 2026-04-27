@@ -25,8 +25,11 @@ mkMessage :: ChatId -> Text -> Message
 mkMessage cid txt = Message
   { messageId = 1
   , chatId = cid
+  , chatType = "private"
   , text = Just txt
   , fromUsername = Nothing
+  , entities = []
+  , replyToFromUsername = Nothing
   }
 
 spec :: Spec

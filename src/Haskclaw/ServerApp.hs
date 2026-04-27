@@ -20,7 +20,12 @@ import Haskclaw.Infra.Paths (ensureChatDir, ensureHaskclawDirs)
 import Haskclaw.Infra.Persistence.StateFile (loadSessions, saveSessions)
 import Haskclaw.Scheduler.Loop (clearInFlight, runLoop)
 import Haskclaw.Telegram.Command.Domain.ClaudeService (askClaude)
-import Haskclaw.Telegram.Command.Domain.TelegramApi (TelegramApi)
+import Haskclaw.Telegram.Command.Domain.TelegramApi (TelegramApi, getMe)
+import Haskclaw.Telegram.Command.UseCase.MentionFilter
+  ( DispatchMode (..)
+  , parseDispatchMode
+  , shouldDispatch
+  )
 import Haskclaw.Telegram.Command.Domain.Types
   ( BotState (..)
   , ChatId
@@ -54,25 +59,31 @@ runApp cfg =
 
 main :: IO ()
 main = do
+  args <- getArgs
+  let mode = parseDispatchMode args
   token <- getEnv "TELEGRAM_BOT_TOKEN" <&> toText
   manager <- newManager tlsManagerSettings
   let cfg = TelegramConfig{token = token, manager = manager}
   ensureHaskclawDirs
   sessions <- loadSessions
   botState <- newBotStateWith sessions
-  putTextLn "haskclaw bot started. Polling for messages..."
+  botUsername <- runApp cfg getMe
+  putTextLn $ "haskclaw bot started. mode=" <> show mode
+    <> " botUsername=" <> fromMaybe "<unknown>" botUsername
+  putTextLn "Polling for messages..."
   let spawn = chatWorker botState manager token
   void $ forkIO $ runLoop botState spawn
-  runApp cfg $ pollLoop botState cfg
+  runApp cfg $ pollLoop botState cfg mode botUsername
 
-pollLoop :: BotState -> TelegramConfig -> App ()
-pollLoop botState cfg = do
+pollLoop :: BotState -> TelegramConfig -> DispatchMode -> Maybe Text -> App ()
+pollLoop botState cfg mode botUsername = do
   offset <- liftIO $ readTVarIO botState.offset
   (messages, nextOffset) <- pollOnce offset
   liftIO $ do
     forM_ nextOffset $ \o -> atomically $ writeTVar botState.offset (Just o)
-    forM_ messages $ dispatch botState (chatWorker botState cfg.manager cfg.token)
-  pollLoop botState cfg
+    let allowed = filter (shouldDispatch mode botUsername) messages
+    forM_ allowed $ dispatch botState (chatWorker botState cfg.manager cfg.token)
+  pollLoop botState cfg mode botUsername
 
 typingIntervalMicros :: Int
 typingIntervalMicros = 4000000

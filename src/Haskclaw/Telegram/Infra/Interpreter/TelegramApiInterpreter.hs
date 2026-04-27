@@ -26,6 +26,9 @@ run = interpret $ \_ -> \case
   GetUpdates mOffset -> do
     cfg <- ask @TelegramConfig
     liftIO $ Gateway.fetchUpdates cfg.manager cfg.token mOffset
+  GetMe -> do
+    cfg <- ask @TelegramConfig
+    liftIO $ Gateway.fetchMe cfg.manager cfg.token
   SendMessage chatId text -> do
     cfg <- ask @TelegramConfig
     liftIO $ Gateway.postSendMessage cfg.manager cfg.token chatId text

@@ -1,6 +1,7 @@
 module Haskclaw.Telegram.Command.Domain.TelegramApi
   ( TelegramApi (..)
   , getUpdates
+  , getMe
   , sendMessage
   , sendPhoto
   ) where
@@ -14,6 +15,7 @@ import Haskclaw.Telegram.Command.Domain.Types (ChatId, Update, UpdateId)
 
 data TelegramApi :: Effect where
   GetUpdates :: Maybe UpdateId -> TelegramApi m [Update]
+  GetMe :: TelegramApi m (Maybe Text)
   SendMessage :: ChatId -> Text -> TelegramApi m ()
   SendPhoto :: ChatId -> FilePath -> Maybe Text -> TelegramApi m ()
 

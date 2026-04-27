@@ -24,8 +24,11 @@ spec = describe "PollUpdates.pollOnce" $ do
               , message = Just Message
                   { messageId = 1
                   , chatId = ChatId 42
+                  , chatType = "private"
                   , text = Just "hello"
                   , fromUsername = Just "testuser"
+                  , entities = []
+                  , replyToFromUsername = Nothing
                   }
               }
           ]
@@ -43,8 +46,11 @@ spec = describe "PollUpdates.pollOnce" $ do
               , message = Just Message
                   { messageId = 2
                   , chatId = ChatId 42
+                  , chatType = "private"
                   , text = Just "world"
                   , fromUsername = Nothing
+                  , entities = []
+                  , replyToFromUsername = Nothing
                   }
               }
           ]
@@ -61,8 +67,11 @@ spec = describe "PollUpdates.pollOnce" $ do
               , message = Just Message
                   { messageId = 1
                   , chatId = ChatId 42
+                  , chatType = "private"
                   , text = Just "old"
                   , fromUsername = Nothing
+                  , entities = []
+                  , replyToFromUsername = Nothing
                   }
               }
           , Update
@@ -70,8 +79,11 @@ spec = describe "PollUpdates.pollOnce" $ do
               , message = Just Message
                   { messageId = 2
                   , chatId = ChatId 42
+                  , chatType = "private"
                   , text = Just "new"
                   , fromUsername = Nothing
+                  , entities = []
+                  , replyToFromUsername = Nothing
                   }
               }
           ]

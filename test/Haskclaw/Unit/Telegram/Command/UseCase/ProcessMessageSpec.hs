@@ -15,8 +15,11 @@ spec = describe "ProcessMessage.processMessage" $ do
     let msg = Message
           { messageId = 1
           , chatId = ChatId 42
+          , chatType = "private"
           , text = Just "hello"
           , fromUsername = Just "testuser"
+          , entities = []
+          , replyToFromUsername = Nothing
           }
     result <- runEff $ InMemoryClaudeService.run $ processMessage Nothing msg
     result `shouldBe` Just (Just (SessionId "test-session-id"))
@@ -27,8 +30,11 @@ spec = describe "ProcessMessage.processMessage" $ do
         msg = Message
           { messageId = 1
           , chatId = ChatId 42
+          , chatType = "private"
           , text = Just "hello"
           , fromUsername = Nothing
+          , entities = []
+          , replyToFromUsername = Nothing
           }
     _ <- runEff $ InMemoryClaudeService.runWithSink sink $ processMessage Nothing msg
     streamed <- reverse <$> readIORef bufRef
@@ -40,8 +46,11 @@ spec = describe "ProcessMessage.processMessage" $ do
         msg = Message
           { messageId = 1
           , chatId = ChatId 42
+          , chatType = "private"
           , text = Nothing
           , fromUsername = Nothing
+          , entities = []
+          , replyToFromUsername = Nothing
           }
     result <- runEff $ InMemoryClaudeService.runWithSink sink $ processMessage Nothing msg
     result `shouldBe` Nothing
@@ -51,8 +60,11 @@ spec = describe "ProcessMessage.processMessage" $ do
     let msg = Message
           { messageId = 1
           , chatId = ChatId 42
+          , chatType = "private"
           , text = Just "follow up"
           , fromUsername = Nothing
+          , entities = []
+          , replyToFromUsername = Nothing
           }
     result <- runEff $ InMemoryClaudeService.run $ processMessage (Just (SessionId "prev-session")) msg
     result `shouldBe` Just (Just (SessionId "test-session-id"))

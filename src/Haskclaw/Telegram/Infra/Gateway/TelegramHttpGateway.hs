@@ -1,5 +1,6 @@
 module Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway
   ( fetchUpdates
+  , fetchMe
   , postSendMessage
   , postSendChatAction
   , postSendPhoto
@@ -32,7 +33,7 @@ import Network.HTTP.Types.Status (statusIsSuccessful)
 import System.FilePath (takeExtension, takeFileName)
 import System.Random (randomIO)
 
-import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), GetUpdatesResponse (..), Update, UpdateId (..))
+import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), GetMeResponse (..), GetUpdatesResponse (..), Update, UpdateId (..))
 
 fetchUpdates :: Manager -> Text -> Maybe UpdateId -> IO [Update]
 fetchUpdates manager token mOffset = do
@@ -47,6 +48,21 @@ fetchUpdates manager token mOffset = do
     else do
       putTextLn $ "HTTP error: " <> show (responseStatus resp)
       pure []
+
+fetchMe :: Manager -> Text -> IO (Maybe Text)
+fetchMe manager token = do
+  let url = "https://api.telegram.org/bot" <> toString token <> "/getMe"
+  req <- parseRequest url
+  resp <- httpLbs req manager
+  if statusIsSuccessful (responseStatus resp)
+    then case eitherDecode @GetMeResponse (responseBody resp) of
+      Right r -> pure r.username
+      Left err -> do
+        putTextLn $ "getMe parse error: " <> toText err
+        pure Nothing
+    else do
+      putTextLn $ "getMe HTTP error: " <> show (responseStatus resp)
+      pure Nothing
 
 postSendMessage :: Manager -> Text -> ChatId -> Text -> IO ()
 postSendMessage manager token (ChatId cid) text = do
