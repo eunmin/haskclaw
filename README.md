@@ -22,6 +22,24 @@ stack build
 TELEGRAM_BOT_TOKEN=xxx stack exec haskclaw-exe
 ```
 
+## CLI Options
+
+Pass flags after `--` when running through `stack exec`:
+
+```sh
+stack exec haskclaw-exe -- --help
+```
+
+| Option | Description |
+| --- | --- |
+| `-h`, `--help` | Show the help message and exit. |
+| `--all`, `--all-messages` | Dispatch every message in group chats. Default behavior is to forward only messages that mention the bot or reply to one of its messages. |
+| `--dangerously-skip-permissions` | Forward this flag to the underlying `claude` subprocess so it skips its permission prompts. |
+
+| Environment Variable | Description |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Required. Telegram Bot API token from [@BotFather](https://t.me/BotFather). |
+
 ## Layout
 
 ```
