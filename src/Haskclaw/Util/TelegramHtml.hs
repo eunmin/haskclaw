@@ -18,6 +18,8 @@ import qualified Data.Text as T
 --     * bold @**x**@
 --     * italic @*x*@ (only when @x@ is non-empty and has no leading/trailing
 --       whitespace, so bullet markers like @* item@ stay literal)
+--     * ATX headers @# … ###### …@ at line start, all rendered as @<b>@
+--       (Telegram HTML has no header tags)
 --     * links @[text](url)@
 --
 --   All other characters are HTML-escaped. Unclosed markers are emitted as
@@ -26,22 +28,62 @@ import qualified Data.Text as T
 --   as literal text rather than a nested HTML tag — Telegram's HTML mode
 --   does not allow nesting anyway.
 toTelegramHtml :: Text -> Text
-toTelegramHtml = T.concat . parse
+toTelegramHtml = T.concat . parse True
 
-parse :: Text -> [Text]
-parse t
-  | T.null t = []
+-- | The 'Bool' tracks whether we are currently positioned at the start of
+--   a line, which is required to recognise ATX headers without misfiring on
+--   @#@ characters that appear mid-paragraph.
+parse :: Bool -> Text -> [Text]
+parse _ t | T.null t = []
+parse atStart t
+  | atStart, Just (body, rest) <- splitHeader t =
+      ["<b>", escapeHtml body, "</b>"] <> parse False rest
   | "```" `T.isPrefixOf` t = parseFence (T.drop 3 t)
   | "**"  `T.isPrefixOf` t = parseBold  (T.drop 2 t)
   | "`"   `T.isPrefixOf` t = parseInlineCode (T.drop 1 t)
   | "*"   `T.isPrefixOf` t = parseItalic (T.drop 1 t)
   | "["   `T.isPrefixOf` t = parseLink (T.drop 1 t)
+  | "\n"  `T.isPrefixOf` t = "\n" : parse True (T.drop 1 t)
   | otherwise =
       let (plain, rest) = T.break isMarker t
-       in escapeHtml plain : parse rest
+       in escapeHtml plain : parse False rest
 
 isMarker :: Char -> Bool
-isMarker c = c == '`' || c == '*' || c == '['
+isMarker c = c == '`' || c == '*' || c == '[' || c == '\n'
+
+-- | Recognise an ATX header @#{1,6}<space>…@. Returns the body of the
+--   current line (with surrounding whitespace and an optional trailing
+--   @#…@ run stripped, per CommonMark) and the remainder of the input
+--   starting at the line break. Empty-titled headers are rejected so the
+--   parser does not emit an empty @<b></b>@.
+splitHeader :: Text -> Maybe (Text, Text)
+splitHeader t = do
+  let (hashes, afterHashes) = T.span (== '#') t
+      level = T.length hashes
+  guard (level >= 1 && level <= 6)
+  case T.uncons afterHashes of
+    Just (c, rest1) | c == ' ' || c == '\t' -> do
+      let lineRest = T.dropWhile isSpaceOrTab rest1
+          (line, after) = T.break (== '\n') lineRest
+          body = T.stripEnd (dropTrailingHashes (T.stripEnd line))
+      guard (not (T.null body))
+      pure (body, after)
+    _ -> Nothing
+
+isSpaceOrTab :: Char -> Bool
+isSpaceOrTab c = c == ' ' || c == '\t'
+
+-- | CommonMark allows headers to be terminated by an optional run of @#@
+--   characters preceded by whitespace, e.g. @## Title ##@. Strip that
+--   trailing run so the rendered title is just @Title@.
+dropTrailingHashes :: Text -> Text
+dropTrailingHashes line =
+  let withoutTrailingHashes = T.dropWhileEnd (== '#') line
+   in if T.length withoutTrailingHashes < T.length line
+        && (T.null withoutTrailingHashes
+            || isSpaceOrTab (T.last withoutTrailingHashes))
+        then withoutTrailingHashes
+        else line
 
 splitOn :: Text -> Text -> Maybe (Text, Text)
 splitOn needle t = case T.breakOn needle t of
@@ -50,7 +92,7 @@ splitOn needle t = case T.breakOn needle t of
 
 parseFence :: Text -> [Text]
 parseFence t = case splitOn "```" t of
-  Nothing -> escapeHtml "```" : parse t
+  Nothing -> escapeHtml "```" : parse False t
   Just (raw, after) ->
     let (lang, body) = splitFenceLang raw
         tag = if T.null lang
@@ -60,7 +102,7 @@ parseFence t = case splitOn "```" t of
                      , escapeHtml body
                      , "</code></pre>"
                      ]
-     in tag <> parse after
+     in tag <> parse False after
 
 splitFenceLang :: Text -> (Text, Text)
 splitFenceLang raw = case T.uncons raw of
@@ -82,46 +124,46 @@ isLangToken s =
 
 parseBold :: Text -> [Text]
 parseBold t = case splitOn "**" t of
-  Nothing -> escapeHtml "**" : parse t
+  Nothing -> escapeHtml "**" : parse False t
   Just (body, rest)
-    | T.null body -> escapeHtml "**" : parse t
-    | otherwise -> ["<b>", escapeHtml body, "</b>"] <> parse rest
+    | T.null body -> escapeHtml "**" : parse False t
+    | otherwise -> ["<b>", escapeHtml body, "</b>"] <> parse False rest
 
 parseInlineCode :: Text -> [Text]
 parseInlineCode t = case splitOn "`" t of
-  Nothing -> escapeHtml "`" : parse t
+  Nothing -> escapeHtml "`" : parse False t
   Just (body, rest)
-    | T.null body -> escapeHtml "`" : parse t
-    | otherwise -> ["<code>", escapeHtml body, "</code>"] <> parse rest
+    | T.null body -> escapeHtml "`" : parse False t
+    | otherwise -> ["<code>", escapeHtml body, "</code>"] <> parse False rest
 
 parseItalic :: Text -> [Text]
 parseItalic t = case T.uncons t of
   Nothing -> [escapeHtml "*"]
   Just (c, _)
-    | isSpaceChar c -> escapeHtml "*" : parse t
+    | isSpaceChar c -> escapeHtml "*" : parse False t
   _ -> case splitOn "*" t of
-    Nothing -> escapeHtml "*" : parse t
+    Nothing -> escapeHtml "*" : parse False t
     Just (body, rest)
-      | T.null body -> escapeHtml "*" : parse t
-      | isSpaceChar (T.last body) -> escapeHtml "*" : parse t
-      | otherwise -> ["<i>", escapeHtml body, "</i>"] <> parse rest
+      | T.null body -> escapeHtml "*" : parse False t
+      | isSpaceChar (T.last body) -> escapeHtml "*" : parse False t
+      | otherwise -> ["<i>", escapeHtml body, "</i>"] <> parse False rest
 
 parseLink :: Text -> [Text]
 parseLink t = case splitOn "]" t of
-  Nothing -> escapeHtml "[" : parse t
+  Nothing -> escapeHtml "[" : parse False t
   Just (linkText, afterClose) -> case T.uncons afterClose of
     Just ('(', afterParen) -> case splitOn ")" afterParen of
-      Nothing -> escapeHtml "[" : parse t
+      Nothing -> escapeHtml "[" : parse False t
       Just (url, after)
-        | not (isSafeUrl url) -> escapeHtml "[" : parse t
+        | not (isSafeUrl url) -> escapeHtml "[" : parse False t
         | otherwise ->
             [ "<a href=\""
             , escapeAttr (T.strip url)
             , "\">"
             , escapeHtml linkText
             , "</a>"
-            ] <> parse after
-    _ -> escapeHtml "[" : parse t
+            ] <> parse False after
+    _ -> escapeHtml "[" : parse False t
 
 -- | Telegram only accepts @http@, @https@, and @tg@ link schemes inside
 --   @<a>@ tags. Anything else (including bare paths) makes Telegram reject

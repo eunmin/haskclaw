@@ -94,6 +94,43 @@ spec = do
       toTelegramHtml "before [oops"
         `shouldBe` "before [oops"
 
+  describe "toTelegramHtml — ATX headers" $ do
+    it "wraps a single-hash header in <b>" $
+      toTelegramHtml "# Title\n" `shouldBe` "<b>Title</b>\n"
+
+    it "wraps a header with no trailing newline" $
+      toTelegramHtml "# Title" `shouldBe` "<b>Title</b>"
+
+    it "wraps headers up to level 6, all as <b>" $ do
+      toTelegramHtml "## Two\n"     `shouldBe` "<b>Two</b>\n"
+      toTelegramHtml "###### Six\n" `shouldBe` "<b>Six</b>\n"
+
+    it "leaves seven or more hashes as literal text" $
+      toTelegramHtml "####### too deep\n"
+        `shouldBe` "####### too deep\n"
+
+    it "requires a space after the hashes" $
+      toTelegramHtml "#hello\n" `shouldBe` "#hello\n"
+
+    it "does not turn a mid-line # into a header" $
+      toTelegramHtml "see issue #42 today"
+        `shouldBe` "see issue #42 today"
+
+    it "recognises a header on a non-first line" $
+      toTelegramHtml "intro\n## Section\nbody"
+        `shouldBe` "intro\n<b>Section</b>\nbody"
+
+    it "ignores # lines inside fenced code blocks" $
+      toTelegramHtml "```bash\n# this is a comment\n```"
+        `shouldBe`
+          "<pre><code class=\"language-bash\"># this is a comment</code></pre>"
+
+    it "strips the optional CommonMark trailing # run" $
+      toTelegramHtml "## Title ##\n" `shouldBe` "<b>Title</b>\n"
+
+    it "drops headers with empty bodies" $
+      toTelegramHtml "###   \n" `shouldBe` "###   \n"
+
   describe "toTelegramHtml — Claude scheduler reply (regression)" $
     it "round-trips the schedule confirmation message into valid HTML" $ do
       let input = mconcat
