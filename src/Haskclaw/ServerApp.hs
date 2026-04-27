@@ -16,6 +16,7 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory (doesFileExist)
 import System.Environment (getEnv)
 
+import Haskclaw.Cli.Help (helpText, isHelpRequested)
 import Haskclaw.Infra.Paths (ensureChatDir, ensureHaskclawDirs)
 import Haskclaw.Infra.Persistence.StateFile (loadSessions, saveSessions)
 import Haskclaw.Scheduler.Loop (clearInFlight, runLoop)
@@ -64,6 +65,12 @@ runApp cfg =
 main :: IO ()
 main = do
   args <- getArgs
+  if isHelpRequested args
+    then putText helpText
+    else runBot args
+
+runBot :: [String] -> IO ()
+runBot args = do
   let mode = parseDispatchMode args
       claudeOpts = parseClaudeOptions args
   token <- getEnv "TELEGRAM_BOT_TOKEN" <&> toText

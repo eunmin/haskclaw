@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      Haskclaw.Cli.Help
       Haskclaw.Infra.Paths
       Haskclaw.Infra.Persistence.StateFile
       Haskclaw.Mcp.Server
@@ -222,6 +223,7 @@ test-suite haskclaw-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Haskclaw.Unit.Cli.HelpSpec
       Haskclaw.Unit.Infra.PathsSpec
       Haskclaw.Unit.Mcp.ServerSpec
       Haskclaw.Unit.Scheduler.CronSpec
