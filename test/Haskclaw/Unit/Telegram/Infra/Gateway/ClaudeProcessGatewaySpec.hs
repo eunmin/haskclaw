@@ -9,9 +9,13 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
 import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
-  ( ContentBlock (..)
+  ( ClaudeOptions (..)
+  , ContentBlock (..)
   , StreamEvent (..)
+  , buildClaudeArgs
   , buildClaudeEnv
+  , defaultClaudeOptions
+  , parseClaudeOptions
   , parseStreamLine
   )
 
@@ -20,6 +24,51 @@ encodeStrict = LBS.toStrict . Aeson.encode
 
 spec :: Spec
 spec = do
+  describe "parseClaudeOptions" $ do
+    it "defaults dangerouslySkipPermissions to False" $
+      (parseClaudeOptions []).dangerouslySkipPermissions `shouldBe` False
+
+    it "sets dangerouslySkipPermissions when --dangerously-skip-permissions is passed" $
+      (parseClaudeOptions ["--dangerously-skip-permissions"]).dangerouslySkipPermissions `shouldBe` True
+
+    it "ignores unrelated flags" $
+      parseClaudeOptions ["--all", "--whatever"] `shouldBe` defaultClaudeOptions
+
+  describe "buildClaudeArgs" $ do
+    it "produces the base argv with default options and no session" $
+      buildClaudeArgs defaultClaudeOptions "/tmp/mcp.json" Nothing
+        `shouldBe`
+          [ "-p", "--output-format", "stream-json", "--verbose"
+          , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
+          ]
+
+    it "appends --resume <sid> when a session id is given" $
+      buildClaudeArgs defaultClaudeOptions "/tmp/mcp.json" (Just (SessionId "abc"))
+        `shouldBe`
+          [ "-p", "--output-format", "stream-json", "--verbose"
+          , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
+          , "--resume", "abc"
+          ]
+
+    it "appends --dangerously-skip-permissions when the option is enabled" $ do
+      let opts = defaultClaudeOptions { dangerouslySkipPermissions = True }
+      buildClaudeArgs opts "/tmp/mcp.json" Nothing
+        `shouldBe`
+          [ "-p", "--output-format", "stream-json", "--verbose"
+          , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
+          , "--dangerously-skip-permissions"
+          ]
+
+    it "places --dangerously-skip-permissions after --resume" $ do
+      let opts = defaultClaudeOptions { dangerouslySkipPermissions = True }
+      buildClaudeArgs opts "/tmp/mcp.json" (Just (SessionId "xyz"))
+        `shouldBe`
+          [ "-p", "--output-format", "stream-json", "--verbose"
+          , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
+          , "--resume", "xyz"
+          , "--dangerously-skip-permissions"
+          ]
+
   describe "buildClaudeEnv" $ do
     it "appends AGENT_BROWSER_SESSION with the chat slug to an empty base" $
       buildClaudeEnv (ChatId 42) []

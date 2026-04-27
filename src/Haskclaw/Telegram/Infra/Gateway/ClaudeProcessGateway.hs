@@ -2,6 +2,10 @@ module Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
   ( callClaude
   , parseStreamLine
   , buildClaudeEnv
+  , buildClaudeArgs
+  , parseClaudeOptions
+  , ClaudeOptions (..)
+  , defaultClaudeOptions
   , StreamEvent (..)
   , ContentBlock (..)
   ) where
@@ -37,51 +41,80 @@ import Haskclaw.Infra.Paths (chatIdSlug, chatMcpJsonPath, ensureChatConfig, ensu
 import Haskclaw.Telegram.Command.Domain.Types (ChatId, SessionId (..))
 import Haskclaw.Util.ChatLog (logChat)
 
+-- | CLI-flag knobs that control how the @claude@ subprocess is invoked.
+--   Currently only carries the dangerously-skip-permissions toggle, but kept
+--   as a record so future flags slot in without rippling through call sites.
+data ClaudeOptions = ClaudeOptions
+  { dangerouslySkipPermissions :: Bool
+  } deriving stock (Show, Eq)
+
+defaultClaudeOptions :: ClaudeOptions
+defaultClaudeOptions = ClaudeOptions { dangerouslySkipPermissions = False }
+
+-- | Parse program args into ClaudeOptions. Unknown args are ignored so this
+--   composes with other parsers (e.g. parseDispatchMode).
+parseClaudeOptions :: [String] -> ClaudeOptions
+parseClaudeOptions args = ClaudeOptions
+  { dangerouslySkipPermissions = "--dangerously-skip-permissions" `elem` args
+  }
+
+-- | Build the argv passed to @claude@. Pure so it can be unit-tested without
+--   invoking the subprocess.
+buildClaudeArgs :: ClaudeOptions -> FilePath -> Maybe SessionId -> [String]
+buildClaudeArgs opts mcpJson mSessionId =
+  base <> resume <> dangerous
+  where
+    base = [ "-p", "--output-format", "stream-json", "--verbose"
+           , "--mcp-config", mcpJson, "--strict-mcp-config"
+           ]
+    resume = case mSessionId of
+      Nothing -> []
+      Just (SessionId sid) -> ["--resume", toString sid]
+    dangerous =
+      [ "--dangerously-skip-permissions" | opts.dangerouslySkipPermissions ]
+
 -- | Public entry point. The @sink@ callback receives each assistant text
 --   block as it streams in from @claude -p@. Callers wire it to their
 --   transport (e.g. Telegram sendMessage) to get tool-use narration in
 --   real time. On session-missing retry the sink is reused as-is.
 callClaude
-  :: (Text -> IO ())
+  :: ClaudeOptions
+  -> (Text -> IO ())
   -> ChatId
   -> Maybe SessionId
   -> Text
   -> IO (Either Text SessionId)
-callClaude sink cid mSessionId input = do
+callClaude opts sink cid mSessionId input = do
   workDir <- ensureChatDir cid
   _ <- ensureChatConfig cid
   let effectiveSid = case mSessionId of
         Just (SessionId "") -> Nothing
         other -> other
-  firstAttempt <- runStreamingClaude sink cid workDir effectiveSid input
+  firstAttempt <- runStreamingClaude opts sink cid workDir effectiveSid input
   case firstAttempt of
     Right resp -> pure (Right resp)
     Left err
       | isSessionMissing err, isJust effectiveSid -> do
           logChat cid $ "session not found, retrying fresh: " <> err
-          runStreamingClaude sink cid workDir Nothing input
+          runStreamingClaude opts sink cid workDir Nothing input
       | otherwise -> pure (Left err)
 
 runStreamingClaude
-  :: (Text -> IO ())
+  :: ClaudeOptions
+  -> (Text -> IO ())
   -> ChatId
   -> FilePath
   -> Maybe SessionId
   -> Text
   -> IO (Either Text SessionId)
-runStreamingClaude rawSink cid workDir mSessionId input = do
+runStreamingClaude opts rawSink cid workDir mSessionId input = do
   mcpJson <- chatMcpJsonPath cid
   baseEnv <- getEnvironment
   sentRef <- newIORef False
   let sink t = do
         writeIORef sentRef True
         rawSink t
-      args = ["-p", "--output-format", "stream-json", "--verbose"
-             , "--mcp-config", mcpJson, "--strict-mcp-config"
-             ]
-           <> case mSessionId of
-                Nothing -> []
-                Just (SessionId sid) -> ["--resume", toString sid]
+      args = buildClaudeArgs opts mcpJson mSessionId
       process :: ProcessConfig () Handle Handle
       process =
         setStdout createPipe

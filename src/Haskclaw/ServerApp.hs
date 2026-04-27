@@ -26,6 +26,10 @@ import Haskclaw.Telegram.Command.UseCase.MentionFilter
   , parseDispatchMode
   , shouldDispatch
   )
+import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
+  ( ClaudeOptions
+  , parseClaudeOptions
+  )
 import Haskclaw.Telegram.Command.Domain.Types
   ( BotState (..)
   , ChatId
@@ -61,6 +65,7 @@ main :: IO ()
 main = do
   args <- getArgs
   let mode = parseDispatchMode args
+      claudeOpts = parseClaudeOptions args
   token <- getEnv "TELEGRAM_BOT_TOKEN" <&> toText
   manager <- newManager tlsManagerSettings
   let cfg = TelegramConfig{token = token, manager = manager}
@@ -70,37 +75,39 @@ main = do
   botUsername <- runApp cfg getMe
   putTextLn $ "haskclaw bot started. mode=" <> show mode
     <> " botUsername=" <> fromMaybe "<unknown>" botUsername
+    <> " claudeOpts=" <> show claudeOpts
   putTextLn "Polling for messages..."
-  let spawn = chatWorker botState manager token
+  let spawn = chatWorker claudeOpts botState manager token
   void $ forkIO $ runLoop botState spawn
-  runApp cfg $ pollLoop botState cfg mode botUsername
+  runApp cfg $ pollLoop claudeOpts botState cfg mode botUsername
 
-pollLoop :: BotState -> TelegramConfig -> DispatchMode -> Maybe Text -> App ()
-pollLoop botState cfg mode botUsername = do
+pollLoop :: ClaudeOptions -> BotState -> TelegramConfig -> DispatchMode -> Maybe Text -> App ()
+pollLoop claudeOpts botState cfg mode botUsername = do
   offset <- liftIO $ readTVarIO botState.offset
   (messages, nextOffset) <- pollOnce offset
   liftIO $ do
     forM_ nextOffset $ \o -> atomically $ writeTVar botState.offset (Just o)
     let allowed = filter (shouldDispatch mode botUsername) messages
-    forM_ allowed $ dispatch botState (chatWorker botState cfg.manager cfg.token)
-  pollLoop botState cfg mode botUsername
+    forM_ allowed $
+      dispatch botState (chatWorker claudeOpts botState cfg.manager cfg.token)
+  pollLoop claudeOpts botState cfg mode botUsername
 
 typingIntervalMicros :: Int
 typingIntervalMicros = 4000000
 
 data TurnOutcome = TurnCompleted | TurnInterrupted
 
-chatWorker :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> IO ()
-chatWorker botState manager token cid chan = void $ forkIO $ do
+chatWorker :: ClaudeOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> IO ()
+chatWorker claudeOpts botState manager token cid chan = void $ forkIO $ do
   tid <- myThreadId
   workDir <- ensureChatDir cid
   logChat cid $ "worker started thread=" <> show tid <> " cwd=" <> toText workDir
-  workerLoop botState manager token cid chan []
+  workerLoop claudeOpts botState manager token cid chan []
 
 workerLoop
-  :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask
+  :: ClaudeOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask
   -> [Message] -> IO ()
-workerLoop botState manager token cid chan carryover = do
+workerLoop claudeOpts botState manager token cid chan carryover = do
   task <- atomically $ readTChan chan
   case task of
     UserMsg m -> do
@@ -110,18 +117,18 @@ workerLoop botState manager token cid chan carryover = do
             (c:cs) -> (c, cs ++ m : extras)
           allMsgs = firstMsg : restMsgs
           merged  = mergeMessages firstMsg restMsgs
-      outcome <- handleUserTurn botState manager token cid chan merged
+      outcome <- handleUserTurn claudeOpts botState manager token cid chan merged
       case outcome of
-        TurnCompleted   -> workerLoop botState manager token cid chan []
-        TurnInterrupted -> workerLoop botState manager token cid chan allMsgs
+        TurnCompleted   -> workerLoop claudeOpts botState manager token cid chan []
+        TurnInterrupted -> workerLoop claudeOpts botState manager token cid chan allMsgs
     ScheduledRun taskId' mLbl promptTxt -> do
-      handleScheduled botState manager token cid taskId' mLbl promptTxt
-      workerLoop botState manager token cid chan carryover
+      handleScheduled claudeOpts botState manager token cid taskId' mLbl promptTxt
+      workerLoop claudeOpts botState manager token cid chan carryover
 
 handleUserTurn
-  :: BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> Message
+  :: ClaudeOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> Message
   -> IO TurnOutcome
-handleUserTurn botState manager token cid chan msg = do
+handleUserTurn claudeOpts botState manager token cid chan msg = do
   let user = fromMaybe "unknown" msg.fromUsername
       content = fromMaybe "" msg.text
   logChat cid $ "received @" <> user <> ": " <> content
@@ -130,7 +137,7 @@ handleUserTurn botState manager token cid chan msg = do
   outcome <- runInterruptible chan $
     withPeriodic typingIntervalMicros
       (TelegramGateway.postSendChatAction manager token cid "typing")
-      (runEff $ ClaudeServiceInterpreter.run sink $ processMessage mSessionId msg)
+      (runEff $ ClaudeServiceInterpreter.run claudeOpts sink $ processMessage mSessionId msg)
   case outcome of
     Left () -> do
       logChat cid "interrupted by new user message; restarting turn"
@@ -150,17 +157,17 @@ handleUserTurn botState manager token cid chan msg = do
 --   single message at the end so the @[label]@ prefix stays attached to
 --   the delivered content.
 handleScheduled
-  :: BotState -> Manager -> Text
+  :: ClaudeOptions -> BotState -> Manager -> Text
   -> ChatId -> Text -> Maybe Text -> Text
   -> IO ()
-handleScheduled botState manager token cid tid mLabel promptTxt = do
+handleScheduled claudeOpts botState manager token cid tid mLabel promptTxt = do
   let labelTag = maybe "" (\l -> "[" <> l <> "] ") mLabel
   logChat cid $ "scheduled run " <> tid <> " " <> labelTag <> "start"
   bufRef <- newIORef ([] :: [Text])
   let sink _ piece = modifyIORef' bufRef (piece :)
   mSid <- withPeriodic typingIntervalMicros
     (TelegramGateway.postSendChatAction manager token cid "typing")
-    (runEff $ ClaudeServiceInterpreter.run sink $ askClaude cid Nothing promptTxt)
+    (runEff $ ClaudeServiceInterpreter.run claudeOpts sink $ askClaude cid Nothing promptTxt)
   body <- T.intercalate "\n\n" . reverse <$> readIORef bufRef
   case mSid of
     Just _ -> do

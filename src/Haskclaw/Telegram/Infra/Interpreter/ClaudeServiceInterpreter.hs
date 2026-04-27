@@ -9,6 +9,7 @@ import Effectful.Dispatch.Dynamic (interpret)
 
 import Haskclaw.Telegram.Command.Domain.ClaudeService (ClaudeService (..))
 import Haskclaw.Telegram.Command.Domain.Types (ChatId)
+import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway (ClaudeOptions)
 import qualified Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway as Gateway
 import Haskclaw.Util.ChatLog (logChat)
 
@@ -18,12 +19,13 @@ import Haskclaw.Util.ChatLog (logChat)
 --   user-visible text; the return value is only the resulting session id.
 run
   :: (IOE :> es)
-  => (ChatId -> Text -> IO ())
+  => ClaudeOptions
+  -> (ChatId -> Text -> IO ())
   -> Eff (ClaudeService : es) a
   -> Eff es a
-run sink = interpret $ \_ -> \case
+run opts sink = interpret $ \_ -> \case
   AskClaude cid mSessionId input -> do
-    result <- liftIO $ Gateway.callClaude (sink cid) cid mSessionId input
+    result <- liftIO $ Gateway.callClaude opts (sink cid) cid mSessionId input
     case result of
       Right newSid -> pure (Just newSid)
       Left err -> do
