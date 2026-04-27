@@ -8,6 +8,7 @@ module Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
   , defaultClaudeOptions
   , StreamEvent (..)
   , ContentBlock (..)
+  , compactBoundaryNotice
   ) where
 
 import Relude
@@ -176,6 +177,7 @@ buildClaudeEnv cid base =
 
 data StreamEvent
   = EvSystemInit SessionId (Maybe Text)     -- session_id, model
+  | EvSystemCompactBoundary
   | EvAssistant [ContentBlock]
   | EvUser [ContentBlock]
   | EvResult Text (Maybe SessionId) Bool    -- result text, session_id, is_error
@@ -204,6 +206,7 @@ instance FromJSON StreamEvent where
             sid <- v .: "session_id"
             model <- v .:? "model"
             pure (EvSystemInit (SessionId sid) model)
+          Just "compact_boundary" -> pure EvSystemCompactBoundary
           _ -> pure (EvOther ("system/" <> fromMaybe "?" sub))
       "assistant" -> do
         msg <- v .: "message"
@@ -251,6 +254,9 @@ renderEvent sink cid ev ref = case ev of
   EvSystemInit sid mModel ->
     logChat cid $ "system.init model=" <> fromMaybe "?" mModel
       <> " session=" <> unSid sid
+  EvSystemCompactBoundary -> do
+    logChat cid "system.compact_boundary"
+    sink compactBoundaryNotice
   EvAssistant blocks -> forM_ blocks (renderAssistantBlock sink cid)
   EvUser blocks -> forM_ blocks (renderUserBlock cid)
   EvResult txt mSid isErr -> do
@@ -258,6 +264,10 @@ renderEvent sink cid ev ref = case ev of
       <> " text=" <> truncText 300 txt
     whenJust mSid $ \sid -> writeIORef ref (Just (txt, sid))
   EvOther ty -> logChat cid $ "event=" <> ty
+
+compactBoundaryNotice :: Text
+compactBoundaryNotice =
+  "Summarising our earlier conversation to free up context — one moment, please."
 
 renderAssistantBlock :: (Text -> IO ()) -> ChatId -> ContentBlock -> IO ()
 renderAssistantBlock sink cid = \case

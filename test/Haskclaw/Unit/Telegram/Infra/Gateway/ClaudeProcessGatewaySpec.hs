@@ -5,6 +5,7 @@ import Relude
 import Data.Aeson (object, (.=))
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Text as T
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
@@ -14,6 +15,7 @@ import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
   , StreamEvent (..)
   , buildClaudeArgs
   , buildClaudeEnv
+  , compactBoundaryNotice
   , defaultClaudeOptions
   , parseClaudeOptions
   , parseStreamLine
@@ -24,6 +26,15 @@ encodeStrict = LBS.toStrict . Aeson.encode
 
 spec :: Spec
 spec = do
+  describe "compactBoundaryNotice" $ do
+    it "is a non-empty user-facing string" $
+      compactBoundaryNotice `shouldSatisfy` (not . T.null)
+
+    it "mentions that earlier conversation is being summarised/compacted" $
+      compactBoundaryNotice `shouldSatisfy` \t ->
+        let lower = T.toLower t
+         in "summaris" `T.isInfixOf` lower || "compact" `T.isInfixOf` lower
+
   describe "parseClaudeOptions" $ do
     it "defaults dangerouslySkipPermissions to False" $
       (parseClaudeOptions []).dangerouslySkipPermissions `shouldBe` False
@@ -108,6 +119,13 @@ spec = do
             ]
       parseStreamLine line
         `shouldBe` Right (EvSystemInit (SessionId "abc-123") (Just "claude-opus-4-7"))
+
+    it "parses system/compact_boundary events" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("system" :: Text)
+            , "subtype" .= ("compact_boundary" :: Text)
+            ]
+      parseStreamLine line `shouldBe` Right EvSystemCompactBoundary
 
     it "parses tool_use blocks inside assistant.message" $ do
       let line = encodeStrict $ object
