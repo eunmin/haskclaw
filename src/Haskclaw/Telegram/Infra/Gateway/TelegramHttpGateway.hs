@@ -7,6 +7,7 @@ module Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway
   , postSendPhoto
   , buildMultipartBody
   , photoMimeType
+  , catchHttp
   ) where
 
 import Relude
@@ -17,7 +18,8 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text as T
 import Network.HTTP.Client
-  ( Manager
+  ( HttpException
+  , Manager
   , Request
   , RequestBody (..)
   , httpLbs
@@ -36,34 +38,53 @@ import System.Random (randomIO)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), GetMeResponse (..), GetUpdatesResponse (..), Update, UpdateId (..))
 
+-- | Run an HTTP-throwing action and absorb any 'HttpException' (timeouts,
+--   DNS failures, TLS errors, …) as 'Nothing'. The exception is logged with
+--   the supplied label so operators can spot the failure without the program
+--   crashing. The polling/send loop is expected to continue on @Nothing@.
+catchHttp :: Text -> IO a -> IO (Maybe a)
+catchHttp label action = do
+  result <- try @HttpException action
+  case result of
+    Right r -> pure (Just r)
+    Left e -> do
+      putTextLn $ label <> " HTTP exception: " <> show e
+      pure Nothing
+
 fetchUpdates :: Manager -> Text -> Maybe UpdateId -> IO [Update]
 fetchUpdates manager token mOffset = do
   req <- buildGetUpdatesRequest token mOffset
-  resp <- httpLbs req manager
-  if statusIsSuccessful (responseStatus resp)
-    then case eitherDecode @GetUpdatesResponse (responseBody resp) of
-      Right r -> pure r.result
-      Left err -> do
-        putTextLn $ "JSON parse error: " <> toText err
-        pure []
-    else do
-      putTextLn $ "HTTP error: " <> show (responseStatus resp)
-      pure []
+  mResp <- catchHttp "getUpdates" (httpLbs req manager)
+  case mResp of
+    Nothing -> pure []
+    Just resp
+      | statusIsSuccessful (responseStatus resp) ->
+          case eitherDecode @GetUpdatesResponse (responseBody resp) of
+            Right r -> pure r.result
+            Left err -> do
+              putTextLn $ "JSON parse error: " <> toText err
+              pure []
+      | otherwise -> do
+          putTextLn $ "HTTP error: " <> show (responseStatus resp)
+          pure []
 
 fetchMe :: Manager -> Text -> IO (Maybe Text)
 fetchMe manager token = do
   let url = "https://api.telegram.org/bot" <> toString token <> "/getMe"
   req <- parseRequest url
-  resp <- httpLbs req manager
-  if statusIsSuccessful (responseStatus resp)
-    then case eitherDecode @GetMeResponse (responseBody resp) of
-      Right r -> pure r.username
-      Left err -> do
-        putTextLn $ "getMe parse error: " <> toText err
-        pure Nothing
-    else do
-      putTextLn $ "getMe HTTP error: " <> show (responseStatus resp)
-      pure Nothing
+  mResp <- catchHttp "getMe" (httpLbs req manager)
+  case mResp of
+    Nothing -> pure Nothing
+    Just resp
+      | statusIsSuccessful (responseStatus resp) ->
+          case eitherDecode @GetMeResponse (responseBody resp) of
+            Right r -> pure r.username
+            Left err -> do
+              putTextLn $ "getMe parse error: " <> toText err
+              pure Nothing
+      | otherwise -> do
+          putTextLn $ "getMe HTTP error: " <> show (responseStatus resp)
+          pure Nothing
 
 postSendMessage :: Manager -> Text -> ChatId -> Text -> IO ()
 postSendMessage manager token (ChatId cid) text = do
@@ -78,14 +99,15 @@ postSendMessage manager token (ChatId cid) text = do
         , requestBody = RequestBodyLBS body
         , requestHeaders = [("Content-Type", "application/json")]
         }
-  resp <- httpLbs req' manager
-  unless (statusIsSuccessful (responseStatus resp)) $
-    putTextLn $ "sendMessage error: " <> show (responseStatus resp)
-      <> " " <> decodeUtf8 (toStrict (responseBody resp))
+  mResp <- catchHttp "sendMessage" (httpLbs req' manager)
+  whenJust mResp $ \resp ->
+    unless (statusIsSuccessful (responseStatus resp)) $
+      putTextLn $ "sendMessage error: " <> show (responseStatus resp)
+        <> " " <> decodeUtf8 (toStrict (responseBody resp))
 
 -- | Send a message with @parse_mode=HTML@. Returns 'True' iff Telegram
---   accepted the request. Errors are logged (so the caller can fall back
---   to plain text on 'False') but not raised.
+--   accepted the request. Errors (HTTP exceptions, non-2xx responses) are
+--   logged and surface as 'False' so the caller can fall back to plain text.
 postSendHtml :: Manager -> Text -> ChatId -> Text -> IO Bool
 postSendHtml manager token (ChatId cid) html = do
   let url = "https://api.telegram.org/bot" <> toString token <> "/sendMessage"
@@ -100,12 +122,15 @@ postSendHtml manager token (ChatId cid) html = do
         , requestBody = RequestBodyLBS body
         , requestHeaders = [("Content-Type", "application/json")]
         }
-  resp <- httpLbs req' manager
-  let ok = statusIsSuccessful (responseStatus resp)
-  unless ok $
-    putTextLn $ "sendMessage(HTML) error: " <> show (responseStatus resp)
-      <> " " <> decodeUtf8 (toStrict (responseBody resp))
-  pure ok
+  mResp <- catchHttp "sendMessage(HTML)" (httpLbs req' manager)
+  case mResp of
+    Nothing -> pure False
+    Just resp -> do
+      let ok = statusIsSuccessful (responseStatus resp)
+      unless ok $
+        putTextLn $ "sendMessage(HTML) error: " <> show (responseStatus resp)
+          <> " " <> decodeUtf8 (toStrict (responseBody resp))
+      pure ok
 
 postSendChatAction :: Manager -> Text -> ChatId -> Text -> IO ()
 postSendChatAction manager token (ChatId cid) action = do
@@ -120,10 +145,11 @@ postSendChatAction manager token (ChatId cid) action = do
         , requestBody = RequestBodyLBS body
         , requestHeaders = [("Content-Type", "application/json")]
         }
-  resp <- httpLbs req' manager
-  unless (statusIsSuccessful (responseStatus resp)) $
-    putTextLn $ "sendChatAction error: " <> show (responseStatus resp)
-      <> " " <> decodeUtf8 (toStrict (responseBody resp))
+  mResp <- catchHttp "sendChatAction" (httpLbs req' manager)
+  whenJust mResp $ \resp ->
+    unless (statusIsSuccessful (responseStatus resp)) $
+      putTextLn $ "sendChatAction error: " <> show (responseStatus resp)
+        <> " " <> decodeUtf8 (toStrict (responseBody resp))
 
 -- | Send a local image file as a photo. Falls back silently when the file is
 --   missing or the upload fails; errors are logged but never raised so the
@@ -145,10 +171,11 @@ postSendPhoto manager token (ChatId cid) photoPath mCaption = do
             , requestBody = RequestBodyLBS body
             , requestHeaders = [("Content-Type", ctype)]
             }
-      resp <- httpLbs req' manager
-      unless (statusIsSuccessful (responseStatus resp)) $
-        putTextLn $ "sendPhoto error: " <> show (responseStatus resp)
-          <> " " <> decodeUtf8 (toStrict (responseBody resp))
+      mResp <- catchHttp "sendPhoto" (httpLbs req' manager)
+      whenJust mResp $ \resp ->
+        unless (statusIsSuccessful (responseStatus resp)) $
+          putTextLn $ "sendPhoto error: " <> show (responseStatus resp)
+            <> " " <> decodeUtf8 (toStrict (responseBody resp))
 
 buildBoundary :: IO Text
 buildBoundary = do

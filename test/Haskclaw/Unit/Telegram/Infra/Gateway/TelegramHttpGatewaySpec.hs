@@ -2,17 +2,30 @@ module Haskclaw.Unit.Telegram.Infra.Gateway.TelegramHttpGatewaySpec (spec) where
 
 import Relude
 
+import Control.Exception (throwIO)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text as T
+import Network.HTTP.Client (HttpException (..))
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway
   ( buildMultipartBody
+  , catchHttp
   , photoMimeType
   )
 
 spec :: Spec
 spec = do
+  describe "catchHttp" $ do
+    it "returns Just for actions that succeed" $ do
+      result <- catchHttp "ok" (pure (42 :: Int))
+      result `shouldBe` Just 42
+
+    it "absorbs an HttpException and returns Nothing" $ do
+      result <- catchHttp "boom"
+        (throwIO (InvalidUrlException "x" "broken") :: IO Int)
+      result `shouldBe` Nothing
+
   describe "photoMimeType" $ do
     it "maps .png to image/png" $
       photoMimeType "/tmp/a.png" `shouldBe` "image/png"
