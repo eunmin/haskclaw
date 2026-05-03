@@ -20,16 +20,16 @@ import Haskclaw.Cli.Help (helpText, isHelpRequested)
 import Haskclaw.Infra.Paths (ensureChatDir, ensureHaskclawDirs)
 import Haskclaw.Infra.Persistence.StateFile (loadSessions, saveSessions)
 import Haskclaw.Scheduler.Loop (clearInFlight, runLoop)
-import Haskclaw.Telegram.Command.Domain.ClaudeService (askClaude)
+import Haskclaw.Telegram.Command.Domain.AssistantService (askAssistant)
 import Haskclaw.Telegram.Command.Domain.TelegramApi (TelegramApi, getMe)
 import Haskclaw.Telegram.Command.UseCase.MentionFilter
   ( DispatchMode (..)
   , parseDispatchMode
   , shouldDispatch
   )
-import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
-  ( ClaudeOptions
-  , parseClaudeOptions
+import Haskclaw.Telegram.Infra.Gateway.AssistantProcessGateway
+  ( AssistantOptions
+  , parseAssistantOptions
   )
 import Haskclaw.Telegram.Command.Domain.Types
   ( BotState (..)
@@ -51,7 +51,7 @@ import Haskclaw.Util.MarkdownImage (InlineImage (..), extractImages)
 import Haskclaw.Util.Periodic (withPeriodic)
 import Haskclaw.Util.TelegramHtml (toTelegramHtml)
 import qualified Haskclaw.Telegram.Infra.Gateway.TelegramHttpGateway as TelegramGateway
-import qualified Haskclaw.Telegram.Infra.Interpreter.ClaudeServiceInterpreter as ClaudeServiceInterpreter
+import qualified Haskclaw.Telegram.Infra.Interpreter.AssistantServiceInterpreter as AssistantServiceInterpreter
 import Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter (TelegramConfig (..))
 import qualified Haskclaw.Telegram.Infra.Interpreter.TelegramApiInterpreter as TelegramApiInterpreter
 
@@ -73,7 +73,7 @@ main = do
 runBot :: [String] -> IO ()
 runBot args = do
   let mode = parseDispatchMode args
-      claudeOpts = parseClaudeOptions args
+      assistantOpts = parseAssistantOptions args
   token <- getEnv "TELEGRAM_BOT_TOKEN" <&> toText
   manager <- newManager tlsManagerSettings
   let cfg = TelegramConfig{token = token, manager = manager}
@@ -83,39 +83,39 @@ runBot args = do
   botUsername <- runApp cfg getMe
   putTextLn $ "haskclaw bot started. mode=" <> show mode
     <> " botUsername=" <> fromMaybe "<unknown>" botUsername
-    <> " claudeOpts=" <> show claudeOpts
+    <> " assistantOpts=" <> show assistantOpts
   putTextLn "Polling for messages..."
-  let spawn = chatWorker claudeOpts botState manager token
+  let spawn = chatWorker assistantOpts botState manager token
   void $ forkIO $ runLoop botState spawn
-  runApp cfg $ pollLoop claudeOpts botState cfg mode botUsername
+  runApp cfg $ pollLoop assistantOpts botState cfg mode botUsername
 
-pollLoop :: ClaudeOptions -> BotState -> TelegramConfig -> DispatchMode -> Maybe Text -> App ()
-pollLoop claudeOpts botState cfg mode botUsername = do
+pollLoop :: AssistantOptions -> BotState -> TelegramConfig -> DispatchMode -> Maybe Text -> App ()
+pollLoop assistantOpts botState cfg mode botUsername = do
   offset <- liftIO $ readTVarIO botState.offset
   (messages, nextOffset) <- pollOnce offset
   liftIO $ do
     forM_ nextOffset $ \o -> atomically $ writeTVar botState.offset (Just o)
     let allowed = filter (shouldDispatch mode botUsername) messages
     forM_ allowed $
-      dispatch botState (chatWorker claudeOpts botState cfg.manager cfg.token)
-  pollLoop claudeOpts botState cfg mode botUsername
+      dispatch botState (chatWorker assistantOpts botState cfg.manager cfg.token)
+  pollLoop assistantOpts botState cfg mode botUsername
 
 typingIntervalMicros :: Int
 typingIntervalMicros = 4000000
 
 data TurnOutcome = TurnCompleted | TurnInterrupted
 
-chatWorker :: ClaudeOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> IO ()
-chatWorker claudeOpts botState manager token cid chan = void $ forkIO $ do
+chatWorker :: AssistantOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> IO ()
+chatWorker assistantOpts botState manager token cid chan = void $ forkIO $ do
   tid <- myThreadId
   workDir <- ensureChatDir cid
   logChat cid $ "worker started thread=" <> show tid <> " cwd=" <> toText workDir
-  workerLoop claudeOpts botState manager token cid chan []
+  workerLoop assistantOpts botState manager token cid chan []
 
 workerLoop
-  :: ClaudeOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask
+  :: AssistantOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask
   -> [Message] -> IO ()
-workerLoop claudeOpts botState manager token cid chan carryover = do
+workerLoop assistantOpts botState manager token cid chan carryover = do
   task <- atomically $ readTChan chan
   case task of
     UserMsg m -> do
@@ -125,18 +125,18 @@ workerLoop claudeOpts botState manager token cid chan carryover = do
             (c:cs) -> (c, cs ++ m : extras)
           allMsgs = firstMsg : restMsgs
           merged  = mergeMessages firstMsg restMsgs
-      outcome <- handleUserTurn claudeOpts botState manager token cid chan merged
+      outcome <- handleUserTurn assistantOpts botState manager token cid chan merged
       case outcome of
-        TurnCompleted   -> workerLoop claudeOpts botState manager token cid chan []
-        TurnInterrupted -> workerLoop claudeOpts botState manager token cid chan allMsgs
+        TurnCompleted   -> workerLoop assistantOpts botState manager token cid chan []
+        TurnInterrupted -> workerLoop assistantOpts botState manager token cid chan allMsgs
     ScheduledRun taskId' mLbl promptTxt -> do
-      handleScheduled claudeOpts botState manager token cid taskId' mLbl promptTxt
-      workerLoop claudeOpts botState manager token cid chan carryover
+      handleScheduled assistantOpts botState manager token cid taskId' mLbl promptTxt
+      workerLoop assistantOpts botState manager token cid chan carryover
 
 handleUserTurn
-  :: ClaudeOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> Message
+  :: AssistantOptions -> BotState -> Manager -> Text -> ChatId -> TChan ChatTask -> Message
   -> IO TurnOutcome
-handleUserTurn claudeOpts botState manager token cid chan msg = do
+handleUserTurn assistantOpts botState manager token cid chan msg = do
   let user = fromMaybe "unknown" msg.fromUsername
       content = fromMaybe "" msg.text
   logChat cid $ "received @" <> user <> ": " <> content
@@ -145,7 +145,7 @@ handleUserTurn claudeOpts botState manager token cid chan msg = do
   outcome <- runInterruptible chan $
     withPeriodic typingIntervalMicros
       (TelegramGateway.postSendChatAction manager token cid "typing")
-      (runEff $ ClaudeServiceInterpreter.run claudeOpts sink $ processMessage mSessionId msg)
+      (runEff $ AssistantServiceInterpreter.run assistantOpts sink $ processMessage mSessionId msg)
   case outcome of
     Left () -> do
       logChat cid "interrupted by new user message; restarting turn"
@@ -165,17 +165,17 @@ handleUserTurn claudeOpts botState manager token cid chan msg = do
 --   single message at the end so the @[label]@ prefix stays attached to
 --   the delivered content.
 handleScheduled
-  :: ClaudeOptions -> BotState -> Manager -> Text
+  :: AssistantOptions -> BotState -> Manager -> Text
   -> ChatId -> Text -> Maybe Text -> Text
   -> IO ()
-handleScheduled claudeOpts botState manager token cid tid mLabel promptTxt = do
+handleScheduled assistantOpts botState manager token cid tid mLabel promptTxt = do
   let labelTag = maybe "" (\l -> "[" <> l <> "] ") mLabel
   logChat cid $ "scheduled run " <> tid <> " " <> labelTag <> "start"
   bufRef <- newIORef ([] :: [Text])
   let sink _ piece = modifyIORef' bufRef (piece :)
   mSid <- withPeriodic typingIntervalMicros
     (TelegramGateway.postSendChatAction manager token cid "typing")
-    (runEff $ ClaudeServiceInterpreter.run claudeOpts sink $ askClaude cid Nothing promptTxt)
+    (runEff $ AssistantServiceInterpreter.run assistantOpts sink $ askAssistant cid Nothing promptTxt)
   body <- T.intercalate "\n\n" . reverse <$> readIORef bufRef
   case mSid of
     Just _ -> do
@@ -187,7 +187,7 @@ handleScheduled claudeOpts botState manager token cid tid mLabel promptTxt = do
         ("[scheduled task failed] " <> labelTag <> body)
   clearInFlight botState cid tid
 
--- | Split a Claude reply into inline images and residual text. Images are sent
+-- | Split an assistant reply into inline images and residual text. Images are sent
 --   via sendPhoto (skipped if the file is missing); leftover text is sent via
 --   sendMessage. Either part may be empty — in that case the corresponding
 --   call is skipped entirely.

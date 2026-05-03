@@ -8,7 +8,7 @@ import Relude
 import Data.Char (isAlphaNum)
 import qualified Data.Text as T
 
--- | Convert a subset of Markdown (used by Claude) to HTML compatible with
+-- | Convert a subset of Markdown (used by assistants) to HTML compatible with
 --   Telegram's @parse_mode=HTML@.
 --
 --   Supports:

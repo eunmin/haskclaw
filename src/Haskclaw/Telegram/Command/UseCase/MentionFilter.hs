@@ -22,7 +22,7 @@ parseDispatchMode args
   | "--all-messages" `elem` args = AllMessages
   | otherwise = MentionOnly
 
--- | Decide whether a message should be forwarded to Claude.
+-- | Decide whether a message should be forwarded to the assistant.
 --   Private chats always pass. In group chats with MentionOnly, the message
 --   must mention the bot via a `mention` or `bot_command` entity, or be a
 --   reply to a message originally sent by the bot.

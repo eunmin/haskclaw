@@ -1,13 +1,13 @@
-module Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
-  ( callClaude
+module Haskclaw.Telegram.Infra.Gateway.AssistantProcessGateway
+  ( callAssistant
   , parseStreamLine
-  , buildClaudeEnv
+  , buildAssistantEnv
   , buildClaudeArgs
   , buildCodexArgs
-  , parseClaudeOptions
+  , parseAssistantOptions
   , AssistantProvider (..)
-  , ClaudeOptions (..)
-  , defaultClaudeOptions
+  , AssistantOptions (..)
+  , defaultAssistantOptions
   , StreamEvent (..)
   , ContentBlock (..)
   , compactBoundaryNotice
@@ -51,21 +51,21 @@ data AssistantProvider
   | Codex
   deriving stock (Show, Eq)
 
-data ClaudeOptions = ClaudeOptions
+data AssistantOptions = AssistantOptions
   { provider :: AssistantProvider
   , dangerouslySkipPermissions :: Bool
   } deriving stock (Show, Eq)
 
-defaultClaudeOptions :: ClaudeOptions
-defaultClaudeOptions = ClaudeOptions
+defaultAssistantOptions :: AssistantOptions
+defaultAssistantOptions = AssistantOptions
   { provider = Claude
   , dangerouslySkipPermissions = False
   }
 
--- | Parse program args into ClaudeOptions. Unknown args are ignored so this
+-- | Parse program args into AssistantOptions. Unknown args are ignored so this
 --   composes with other parsers (e.g. parseDispatchMode).
-parseClaudeOptions :: [String] -> ClaudeOptions
-parseClaudeOptions args = ClaudeOptions
+parseAssistantOptions :: [String] -> AssistantOptions
+parseAssistantOptions args = AssistantOptions
   { provider = parseProvider args
   , dangerouslySkipPermissions = "--dangerously-skip-permissions" `elem` args
   }
@@ -89,7 +89,7 @@ parseProviderValue v fallback = case T.toLower (toText v) of
 
 -- | Build the argv passed to @claude@. Pure so it can be unit-tested without
 --   invoking the subprocess.
-buildClaudeArgs :: ClaudeOptions -> FilePath -> Maybe SessionId -> [String]
+buildClaudeArgs :: AssistantOptions -> FilePath -> Maybe SessionId -> [String]
 buildClaudeArgs opts mcpJson mSessionId =
   base <> resume <> dangerous
   where
@@ -102,7 +102,7 @@ buildClaudeArgs opts mcpJson mSessionId =
     dangerous =
       [ "--dangerously-skip-permissions" | opts.dangerouslySkipPermissions ]
 
-buildCodexArgs :: ClaudeOptions -> FilePath -> FilePath -> ChatId -> FilePath -> Maybe SessionId -> [String]
+buildCodexArgs :: AssistantOptions -> FilePath -> FilePath -> ChatId -> FilePath -> Maybe SessionId -> [String]
 buildCodexArgs opts workDir mcpPath cid _mcpJson mSessionId =
   case mSessionId of
     Nothing ->
@@ -127,37 +127,37 @@ chatIdText (ChatId cid) = show cid
 --   block as it streams in from the selected CLI. Callers wire it to their
 --   transport (e.g. Telegram sendMessage) to get tool-use narration in
 --   real time. On session-missing retry the sink is reused as-is.
-callClaude
-  :: ClaudeOptions
+callAssistant
+  :: AssistantOptions
   -> (Text -> IO ())
   -> ChatId
   -> Maybe SessionId
   -> Text
   -> IO (Either Text SessionId)
-callClaude opts sink cid mSessionId input = do
+callAssistant opts sink cid mSessionId input = do
   workDir <- ensureChatDir cid
   _ <- ensureChatConfig cid
   let effectiveSid = case mSessionId of
         Just (SessionId "") -> Nothing
         other -> other
-  firstAttempt <- runStreamingClaude opts sink cid workDir effectiveSid input
+  firstAttempt <- runStreamingAssistant opts sink cid workDir effectiveSid input
   case firstAttempt of
     Right resp -> pure (Right resp)
     Left err
       | isSessionMissing err, isJust effectiveSid -> do
           logChat cid $ "session not found, retrying fresh: " <> err
-          runStreamingClaude opts sink cid workDir Nothing input
+          runStreamingAssistant opts sink cid workDir Nothing input
       | otherwise -> pure (Left err)
 
-runStreamingClaude
-  :: ClaudeOptions
+runStreamingAssistant
+  :: AssistantOptions
   -> (Text -> IO ())
   -> ChatId
   -> FilePath
   -> Maybe SessionId
   -> Text
   -> IO (Either Text SessionId)
-runStreamingClaude opts rawSink cid workDir mSessionId input = do
+runStreamingAssistant opts rawSink cid workDir mSessionId input = do
   mcpJson <- chatMcpJsonPath cid
   mcpPath <- mcpBinaryPath
   baseEnv <- getEnvironment
@@ -173,7 +173,7 @@ runStreamingClaude opts rawSink cid workDir mSessionId input = do
         setStdout createPipe
           $ setStderr createPipe
           $ setWorkingDir workDir
-          $ setEnv (buildClaudeEnv cid baseEnv)
+          $ setEnv (buildAssistantEnv cid baseEnv)
           $ setStdin (byteStringInput (encodeUtf8 input))
           $ proc command args
   (exit, mFinal, errText) <- withProcessWait process $ \p -> do
@@ -218,8 +218,8 @@ handleLine sink cid line ref = case parseStreamLine line of
 --   directory slug so agent-browser daemons remain isolated across chats.
 --   Any existing entry for the same key is overwritten; all other entries are
 --   preserved in their original order.
-buildClaudeEnv :: ChatId -> [(String, String)] -> [(String, String)]
-buildClaudeEnv cid base =
+buildAssistantEnv :: ChatId -> [(String, String)] -> [(String, String)]
+buildAssistantEnv cid base =
   let key = "AGENT_BROWSER_SESSION"
       value = chatIdSlug cid
       stripped = filter (\(k, _) -> k /= key) base

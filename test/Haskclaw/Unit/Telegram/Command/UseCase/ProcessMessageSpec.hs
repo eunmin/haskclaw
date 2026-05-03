@@ -7,11 +7,11 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), Message (..), SessionId (..))
 import Haskclaw.Telegram.Command.UseCase.ProcessMessage (processMessage)
-import qualified Haskclaw.Unit.Telegram.Command.InMemoryClaudeService as InMemoryClaudeService
+import qualified Haskclaw.Unit.Telegram.Command.InMemoryAssistantService as InMemoryAssistantService
 
 spec :: Spec
 spec = describe "ProcessMessage.processMessage" $ do
-  it "returns the session id produced by Claude for a text message" $ do
+  it "returns the session id produced by the assistant for a text message" $ do
     let msg = Message
           { messageId = 1
           , chatId = ChatId 42
@@ -21,7 +21,7 @@ spec = describe "ProcessMessage.processMessage" $ do
           , entities = []
           , replyToFromUsername = Nothing
           }
-    result <- runEff $ InMemoryClaudeService.run $ processMessage Nothing msg
+    result <- runEff $ InMemoryAssistantService.run $ processMessage Nothing msg
     result `shouldBe` Just (Just (SessionId "test-session-id"))
 
   it "streams assistant text through the provided sink" $ do
@@ -36,7 +36,7 @@ spec = describe "ProcessMessage.processMessage" $ do
           , entities = []
           , replyToFromUsername = Nothing
           }
-    _ <- runEff $ InMemoryClaudeService.runWithSink sink $ processMessage Nothing msg
+    _ <- runEff $ InMemoryAssistantService.runWithSink sink $ processMessage Nothing msg
     streamed <- reverse <$> readIORef bufRef
     streamed `shouldBe` [(ChatId 42, "echo: hello")]
 
@@ -52,11 +52,11 @@ spec = describe "ProcessMessage.processMessage" $ do
           , entities = []
           , replyToFromUsername = Nothing
           }
-    result <- runEff $ InMemoryClaudeService.runWithSink sink $ processMessage Nothing msg
+    result <- runEff $ InMemoryAssistantService.runWithSink sink $ processMessage Nothing msg
     result `shouldBe` Nothing
     readIORef bufRef `shouldReturn` ([] :: [(ChatId, Text)])
 
-  it "forwards the given session id to Claude" $ do
+  it "forwards the given session id to the assistant" $ do
     let msg = Message
           { messageId = 1
           , chatId = ChatId 42
@@ -66,5 +66,5 @@ spec = describe "ProcessMessage.processMessage" $ do
           , entities = []
           , replyToFromUsername = Nothing
           }
-    result <- runEff $ InMemoryClaudeService.run $ processMessage (Just (SessionId "prev-session")) msg
+    result <- runEff $ InMemoryAssistantService.run $ processMessage (Just (SessionId "prev-session")) msg
     result `shouldBe` Just (Just (SessionId "test-session-id"))

@@ -1,4 +1,4 @@
-module Haskclaw.Unit.Telegram.Infra.Gateway.ClaudeProcessGatewaySpec (spec) where
+module Haskclaw.Unit.Telegram.Infra.Gateway.AssistantProcessGatewaySpec (spec) where
 
 import Relude
 
@@ -9,17 +9,17 @@ import qualified Data.Text as T
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
-import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
+import Haskclaw.Telegram.Infra.Gateway.AssistantProcessGateway
   ( AssistantProvider (..)
-  , ClaudeOptions (..)
+  , AssistantOptions (..)
   , ContentBlock (..)
   , StreamEvent (..)
+  , buildAssistantEnv
   , buildClaudeArgs
-  , buildClaudeEnv
   , buildCodexArgs
   , compactBoundaryNotice
-  , defaultClaudeOptions
-  , parseClaudeOptions
+  , defaultAssistantOptions
+  , parseAssistantOptions
   , parseStreamLine
   )
 
@@ -37,41 +37,41 @@ spec = do
         let lower = T.toLower t
          in "summaris" `T.isInfixOf` lower || "compact" `T.isInfixOf` lower
 
-  describe "parseClaudeOptions" $ do
+  describe "parseAssistantOptions" $ do
     it "defaults provider to Claude" $
-      (parseClaudeOptions []).provider `shouldBe` Claude
+      (parseAssistantOptions []).provider `shouldBe` Claude
 
     it "sets provider to Codex with --assistant codex" $
-      (parseClaudeOptions ["--assistant", "codex"]).provider `shouldBe` Codex
+      (parseAssistantOptions ["--assistant", "codex"]).provider `shouldBe` Codex
 
     it "sets provider to Codex with --assistant=codex" $
-      (parseClaudeOptions ["--assistant=codex"]).provider `shouldBe` Codex
+      (parseAssistantOptions ["--assistant=codex"]).provider `shouldBe` Codex
 
     it "supports --assistant-provider as an alias" $
-      (parseClaudeOptions ["--assistant-provider", "codex"]).provider `shouldBe` Codex
+      (parseAssistantOptions ["--assistant-provider", "codex"]).provider `shouldBe` Codex
 
     it "keeps the default provider for unknown provider values" $
-      parseClaudeOptions ["--assistant", "unknown"] `shouldBe` defaultClaudeOptions
+      parseAssistantOptions ["--assistant", "unknown"] `shouldBe` defaultAssistantOptions
 
     it "defaults dangerouslySkipPermissions to False" $
-      (parseClaudeOptions []).dangerouslySkipPermissions `shouldBe` False
+      (parseAssistantOptions []).dangerouslySkipPermissions `shouldBe` False
 
     it "sets dangerouslySkipPermissions when --dangerously-skip-permissions is passed" $
-      (parseClaudeOptions ["--dangerously-skip-permissions"]).dangerouslySkipPermissions `shouldBe` True
+      (parseAssistantOptions ["--dangerously-skip-permissions"]).dangerouslySkipPermissions `shouldBe` True
 
     it "ignores unrelated flags" $
-      parseClaudeOptions ["--all", "--whatever"] `shouldBe` defaultClaudeOptions
+      parseAssistantOptions ["--all", "--whatever"] `shouldBe` defaultAssistantOptions
 
   describe "buildClaudeArgs" $ do
     it "produces the base argv with default options and no session" $
-      buildClaudeArgs defaultClaudeOptions "/tmp/mcp.json" Nothing
+      buildClaudeArgs defaultAssistantOptions "/tmp/mcp.json" Nothing
         `shouldBe`
           [ "-p", "--output-format", "stream-json", "--verbose"
           , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
           ]
 
     it "appends --resume <sid> when a session id is given" $
-      buildClaudeArgs defaultClaudeOptions "/tmp/mcp.json" (Just (SessionId "abc"))
+      buildClaudeArgs defaultAssistantOptions "/tmp/mcp.json" (Just (SessionId "abc"))
         `shouldBe`
           [ "-p", "--output-format", "stream-json", "--verbose"
           , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
@@ -79,7 +79,7 @@ spec = do
           ]
 
     it "appends --dangerously-skip-permissions when the option is enabled" $ do
-      let opts = defaultClaudeOptions { dangerouslySkipPermissions = True }
+      let opts = defaultAssistantOptions { dangerouslySkipPermissions = True }
       buildClaudeArgs opts "/tmp/mcp.json" Nothing
         `shouldBe`
           [ "-p", "--output-format", "stream-json", "--verbose"
@@ -88,7 +88,7 @@ spec = do
           ]
 
     it "places --dangerously-skip-permissions after --resume" $ do
-      let opts = defaultClaudeOptions { dangerouslySkipPermissions = True }
+      let opts = defaultAssistantOptions { dangerouslySkipPermissions = True }
       buildClaudeArgs opts "/tmp/mcp.json" (Just (SessionId "xyz"))
         `shouldBe`
           [ "-p", "--output-format", "stream-json", "--verbose"
@@ -99,7 +99,7 @@ spec = do
 
   describe "buildCodexArgs" $ do
     it "produces codex exec argv with default options and no session" $
-      buildCodexArgs defaultClaudeOptions "/tmp/work" "/tmp/haskclaw-mcp" (ChatId 42) "/tmp/mcp.json" Nothing
+      buildCodexArgs defaultAssistantOptions "/tmp/work" "/tmp/haskclaw-mcp" (ChatId 42) "/tmp/mcp.json" Nothing
         `shouldBe`
           [ "exec", "--json", "--skip-git-repo-check"
           , "-C", "/tmp/work"
@@ -109,7 +109,7 @@ spec = do
           ]
 
     it "produces codex resume argv when a session id is given" $
-      buildCodexArgs defaultClaudeOptions "/tmp/work" "/tmp/haskclaw-mcp" (ChatId 42) "/tmp/mcp.json" (Just (SessionId "abc"))
+      buildCodexArgs defaultAssistantOptions "/tmp/work" "/tmp/haskclaw-mcp" (ChatId 42) "/tmp/mcp.json" (Just (SessionId "abc"))
         `shouldBe`
           [ "exec", "resume", "--json", "--skip-git-repo-check"
           , "-c", "mcp_servers.haskclaw.command=\"/tmp/haskclaw-mcp\""
@@ -119,7 +119,7 @@ spec = do
           ]
 
     it "maps dangerouslySkipPermissions to the Codex bypass flag" $ do
-      let opts = defaultClaudeOptions { provider = Codex, dangerouslySkipPermissions = True }
+      let opts = defaultAssistantOptions { provider = Codex, dangerouslySkipPermissions = True }
       buildCodexArgs opts "/tmp/work" "/tmp/haskclaw-mcp" (ChatId (-7)) "/tmp/mcp.json" Nothing
         `shouldBe`
           [ "exec", "--json", "--skip-git-repo-check"
@@ -130,17 +130,17 @@ spec = do
           , "--dangerously-bypass-approvals-and-sandbox"
           ]
 
-  describe "buildClaudeEnv" $ do
+  describe "buildAssistantEnv" $ do
     it "appends AGENT_BROWSER_SESSION with the chat slug to an empty base" $
-      buildClaudeEnv (ChatId 42) []
+      buildAssistantEnv (ChatId 42) []
         `shouldBe` [("AGENT_BROWSER_SESSION", "42")]
 
     it "prefixes negative chat ids with neg_ to match the chat directory" $
-      buildClaudeEnv (ChatId (-7)) []
+      buildAssistantEnv (ChatId (-7)) []
         `shouldBe` [("AGENT_BROWSER_SESSION", "neg_7")]
 
     it "preserves unrelated entries in their original order" $
-      buildClaudeEnv (ChatId 1) [("HOME", "/h"), ("PATH", "/bin")]
+      buildAssistantEnv (ChatId 1) [("HOME", "/h"), ("PATH", "/bin")]
         `shouldBe`
           [ ("HOME", "/h")
           , ("PATH", "/bin")
@@ -148,7 +148,7 @@ spec = do
           ]
 
     it "overrides an existing AGENT_BROWSER_SESSION instead of duplicating it" $ do
-      let result = buildClaudeEnv (ChatId 99)
+      let result = buildAssistantEnv (ChatId 99)
             [ ("HOME", "/h")
             , ("AGENT_BROWSER_SESSION", "stale")
             , ("PATH", "/bin")

@@ -141,9 +141,9 @@ toolsListResult = object ["tools" .= toolDefs]
     toolDefs :: [Value]
     toolDefs =
       [ tool "schedule_task"
-          "Register a recurring task. Prompt is sent to Claude on each cron tick and the response is delivered to the current chat."
+          "Register a recurring task. Prompt is sent to the assistant on each cron tick and the response is delivered to the current chat."
           (objSchema ["prompt", "cron"]
-            [ ("prompt", "What to ask Claude when the task fires.")
+            [ ("prompt", "What to ask the assistant when the task fires.")
             , ("cron",   "5-field cron expression in local time, e.g. \"0 8 * * *\".")
             , ("label",  "Optional short label for humans.")
             ])
@@ -301,4 +301,3 @@ runUpdateTask cid args = case runParser parser args of
       mc  <- o .:? "cron"
       ml  <- o .:? "label"
       pure (tid, mp, mc, ml)
-
