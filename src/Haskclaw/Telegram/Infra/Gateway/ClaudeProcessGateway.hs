@@ -3,7 +3,9 @@ module Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
   , parseStreamLine
   , buildClaudeEnv
   , buildClaudeArgs
+  , buildCodexArgs
   , parseClaudeOptions
+  , AssistantProvider (..)
   , ClaudeOptions (..)
   , defaultClaudeOptions
   , StreamEvent (..)
@@ -18,6 +20,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
+import Data.List (stripPrefix)
 import qualified Data.Text as T
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -38,26 +41,51 @@ import System.Process.Typed
   , withProcessWait
   )
 
-import Haskclaw.Infra.Paths (chatIdSlug, chatMcpJsonPath, ensureChatConfig, ensureChatDir)
-import Haskclaw.Telegram.Command.Domain.Types (ChatId, SessionId (..))
+import Haskclaw.Infra.Paths (chatIdSlug, chatMcpJsonPath, ensureChatConfig, ensureChatDir, mcpBinaryPath)
+import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
 import Haskclaw.Util.ChatLog (logChat)
 
--- | CLI-flag knobs that control how the @claude@ subprocess is invoked.
---   Currently only carries the dangerously-skip-permissions toggle, but kept
---   as a record so future flags slot in without rippling through call sites.
+-- | CLI-flag knobs that control how the assistant subprocess is invoked.
+data AssistantProvider
+  = Claude
+  | Codex
+  deriving stock (Show, Eq)
+
 data ClaudeOptions = ClaudeOptions
-  { dangerouslySkipPermissions :: Bool
+  { provider :: AssistantProvider
+  , dangerouslySkipPermissions :: Bool
   } deriving stock (Show, Eq)
 
 defaultClaudeOptions :: ClaudeOptions
-defaultClaudeOptions = ClaudeOptions { dangerouslySkipPermissions = False }
+defaultClaudeOptions = ClaudeOptions
+  { provider = Claude
+  , dangerouslySkipPermissions = False
+  }
 
 -- | Parse program args into ClaudeOptions. Unknown args are ignored so this
 --   composes with other parsers (e.g. parseDispatchMode).
 parseClaudeOptions :: [String] -> ClaudeOptions
 parseClaudeOptions args = ClaudeOptions
-  { dangerouslySkipPermissions = "--dangerously-skip-permissions" `elem` args
+  { provider = parseProvider args
+  , dangerouslySkipPermissions = "--dangerously-skip-permissions" `elem` args
   }
+
+parseProvider :: [String] -> AssistantProvider
+parseProvider = go
+  where
+    go [] = Claude
+    go ("--assistant":v:rest) = parseProviderValue v (go rest)
+    go ("--assistant-provider":v:rest) = parseProviderValue v (go rest)
+    go (arg:rest)
+      | Just v <- stripPrefix "--assistant=" arg = parseProviderValue v (go rest)
+      | Just v <- stripPrefix "--assistant-provider=" arg = parseProviderValue v (go rest)
+      | otherwise = go rest
+
+parseProviderValue :: String -> AssistantProvider -> AssistantProvider
+parseProviderValue v fallback = case T.toLower (toText v) of
+  "claude" -> Claude
+  "codex"  -> Codex
+  _        -> fallback
 
 -- | Build the argv passed to @claude@. Pure so it can be unit-tested without
 --   invoking the subprocess.
@@ -74,8 +102,29 @@ buildClaudeArgs opts mcpJson mSessionId =
     dangerous =
       [ "--dangerously-skip-permissions" | opts.dangerouslySkipPermissions ]
 
+buildCodexArgs :: ClaudeOptions -> FilePath -> FilePath -> ChatId -> FilePath -> Maybe SessionId -> [String]
+buildCodexArgs opts workDir mcpPath cid _mcpJson mSessionId =
+  case mSessionId of
+    Nothing ->
+      ["exec"] <> common <> workspace <> mcp <> dangerous
+    Just (SessionId sid) ->
+      ["exec", "resume"] <> common <> mcp <> dangerous <> [toString sid, "-"]
+  where
+    common = ["--json", "--skip-git-repo-check"]
+    workspace = ["-C", workDir]
+    mcp =
+      [ "-c", "mcp_servers.haskclaw.command=" <> show mcpPath
+      , "-c", "mcp_servers.haskclaw.args=[]"
+      , "-c", "mcp_servers.haskclaw.env.HASKCLAW_CHAT_ID=" <> show (chatIdText cid)
+      ]
+    dangerous =
+      [ "--dangerously-bypass-approvals-and-sandbox" | opts.dangerouslySkipPermissions ]
+
+chatIdText :: ChatId -> Text
+chatIdText (ChatId cid) = show cid
+
 -- | Public entry point. The @sink@ callback receives each assistant text
---   block as it streams in from @claude -p@. Callers wire it to their
+--   block as it streams in from the selected CLI. Callers wire it to their
 --   transport (e.g. Telegram sendMessage) to get tool-use narration in
 --   real time. On session-missing retry the sink is reused as-is.
 callClaude
@@ -110,12 +159,15 @@ runStreamingClaude
   -> IO (Either Text SessionId)
 runStreamingClaude opts rawSink cid workDir mSessionId input = do
   mcpJson <- chatMcpJsonPath cid
+  mcpPath <- mcpBinaryPath
   baseEnv <- getEnvironment
   sentRef <- newIORef False
   let sink t = do
         writeIORef sentRef True
         rawSink t
-      args = buildClaudeArgs opts mcpJson mSessionId
+      (command, args) = case opts.provider of
+        Claude -> ("claude", buildClaudeArgs opts mcpJson mSessionId)
+        Codex  -> ("codex", buildCodexArgs opts workDir mcpPath cid mcpJson mSessionId)
       process :: ProcessConfig () Handle Handle
       process =
         setStdout createPipe
@@ -123,7 +175,7 @@ runStreamingClaude opts rawSink cid workDir mSessionId input = do
           $ setWorkingDir workDir
           $ setEnv (buildClaudeEnv cid baseEnv)
           $ setStdin (byteStringInput (encodeUtf8 input))
-          $ proc "claude" args
+          $ proc command args
   (exit, mFinal, errText) <- withProcessWait process $ \p -> do
     resultRef <- newIORef Nothing
     readLoop sink cid (getStdout p) resultRef
@@ -138,7 +190,7 @@ runStreamingClaude opts rawSink cid workDir mSessionId input = do
       pure (Right sid)
     (ExitSuccess, Nothing) -> pure (Left "stream ended without a result event")
     (ExitFailure code, _) -> pure $ Left $
-      "claude process failed (exit " <> show code <> "): " <> errText
+      showProvider opts.provider <> " process failed (exit " <> show code <> "): " <> errText
 
 -- | Read stdout line by line, decode each event, log to console, and capture the final result.
 readLoop :: (Text -> IO ()) -> ChatId -> Handle -> IORef (Maybe (Text, SessionId)) -> IO ()
@@ -177,6 +229,7 @@ buildClaudeEnv cid base =
 
 data StreamEvent
   = EvSystemInit SessionId (Maybe Text)     -- session_id, model
+  | EvThreadStarted SessionId
   | EvSystemCompactBoundary
   | EvAssistant [ContentBlock]
   | EvUser [ContentBlock]
@@ -221,6 +274,17 @@ instance FromJSON StreamEvent where
         sid <- v .:? "session_id"
         isErr <- v .:? "is_error" .!= False
         pure (EvResult txt (fmap SessionId sid) isErr)
+      "thread.started" ->
+        EvThreadStarted . SessionId <$> v .: "thread_id"
+      "item.completed" -> do
+        item <- v .: "item"
+        itemType <- withObject "item.completed.item" (.: "type") item
+        case (itemType :: Text) of
+          "agent_message" -> do
+            txt <- withObject "item.completed.item" (.: "text") item
+            pure (EvAssistant [CbText txt])
+          _ -> pure (EvOther ("item.completed/" <> itemType))
+      "turn.completed" -> pure (EvOther "turn.completed")
       other -> pure (EvOther other)
 
 instance FromJSON ContentBlock where
@@ -254,10 +318,13 @@ renderEvent sink cid ev ref = case ev of
   EvSystemInit sid mModel ->
     logChat cid $ "system.init model=" <> fromMaybe "?" mModel
       <> " session=" <> unSid sid
+  EvThreadStarted sid -> do
+    logChat cid $ "thread.started session=" <> unSid sid
+    writeIORef ref (Just ("", sid))
   EvSystemCompactBoundary -> do
     logChat cid "system.compact_boundary"
     sink compactBoundaryNotice
-  EvAssistant blocks -> forM_ blocks (renderAssistantBlock sink cid)
+  EvAssistant blocks -> forM_ blocks (renderAssistantBlock sink cid ref)
   EvUser blocks -> forM_ blocks (renderUserBlock cid)
   EvResult txt mSid isErr -> do
     logChat cid $ "result is_error=" <> show isErr
@@ -269,11 +336,18 @@ compactBoundaryNotice :: Text
 compactBoundaryNotice =
   "Summarising our earlier conversation to free up context — one moment, please."
 
-renderAssistantBlock :: (Text -> IO ()) -> ChatId -> ContentBlock -> IO ()
-renderAssistantBlock sink cid = \case
+renderAssistantBlock
+  :: (Text -> IO ())
+  -> ChatId
+  -> IORef (Maybe (Text, SessionId))
+  -> ContentBlock
+  -> IO ()
+renderAssistantBlock sink cid ref = \case
   CbText t -> do
     logChat cid $ "assistant: " <> truncText 500 t
     sink t
+    current <- readIORef ref
+    whenJust current $ \(_, sid) -> writeIORef ref (Just (t, sid))
   CbToolUse name input ->
     logChat cid $ "tool_use " <> name <> " "
       <> truncText 300 (decodeUtf8 (toStrict (encode input)))
@@ -297,3 +371,8 @@ truncText n t = if T.length t > n then T.take n t <> "…" else t
 
 isSessionMissing :: Text -> Bool
 isSessionMissing err = "No conversation found with session ID" `T.isInfixOf` err
+
+showProvider :: AssistantProvider -> Text
+showProvider = \case
+  Claude -> "claude"
+  Codex  -> "codex"

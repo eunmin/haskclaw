@@ -10,11 +10,13 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
 import Haskclaw.Telegram.Infra.Gateway.ClaudeProcessGateway
-  ( ClaudeOptions (..)
+  ( AssistantProvider (..)
+  , ClaudeOptions (..)
   , ContentBlock (..)
   , StreamEvent (..)
   , buildClaudeArgs
   , buildClaudeEnv
+  , buildCodexArgs
   , compactBoundaryNotice
   , defaultClaudeOptions
   , parseClaudeOptions
@@ -36,6 +38,21 @@ spec = do
          in "summaris" `T.isInfixOf` lower || "compact" `T.isInfixOf` lower
 
   describe "parseClaudeOptions" $ do
+    it "defaults provider to Claude" $
+      (parseClaudeOptions []).provider `shouldBe` Claude
+
+    it "sets provider to Codex with --assistant codex" $
+      (parseClaudeOptions ["--assistant", "codex"]).provider `shouldBe` Codex
+
+    it "sets provider to Codex with --assistant=codex" $
+      (parseClaudeOptions ["--assistant=codex"]).provider `shouldBe` Codex
+
+    it "supports --assistant-provider as an alias" $
+      (parseClaudeOptions ["--assistant-provider", "codex"]).provider `shouldBe` Codex
+
+    it "keeps the default provider for unknown provider values" $
+      parseClaudeOptions ["--assistant", "unknown"] `shouldBe` defaultClaudeOptions
+
     it "defaults dangerouslySkipPermissions to False" $
       (parseClaudeOptions []).dangerouslySkipPermissions `shouldBe` False
 
@@ -78,6 +95,39 @@ spec = do
           , "--mcp-config", "/tmp/mcp.json", "--strict-mcp-config"
           , "--resume", "xyz"
           , "--dangerously-skip-permissions"
+          ]
+
+  describe "buildCodexArgs" $ do
+    it "produces codex exec argv with default options and no session" $
+      buildCodexArgs defaultClaudeOptions "/tmp/work" "/tmp/haskclaw-mcp" (ChatId 42) "/tmp/mcp.json" Nothing
+        `shouldBe`
+          [ "exec", "--json", "--skip-git-repo-check"
+          , "-C", "/tmp/work"
+          , "-c", "mcp_servers.haskclaw.command=\"/tmp/haskclaw-mcp\""
+          , "-c", "mcp_servers.haskclaw.args=[]"
+          , "-c", "mcp_servers.haskclaw.env.HASKCLAW_CHAT_ID=\"42\""
+          ]
+
+    it "produces codex resume argv when a session id is given" $
+      buildCodexArgs defaultClaudeOptions "/tmp/work" "/tmp/haskclaw-mcp" (ChatId 42) "/tmp/mcp.json" (Just (SessionId "abc"))
+        `shouldBe`
+          [ "exec", "resume", "--json", "--skip-git-repo-check"
+          , "-c", "mcp_servers.haskclaw.command=\"/tmp/haskclaw-mcp\""
+          , "-c", "mcp_servers.haskclaw.args=[]"
+          , "-c", "mcp_servers.haskclaw.env.HASKCLAW_CHAT_ID=\"42\""
+          , "abc", "-"
+          ]
+
+    it "maps dangerouslySkipPermissions to the Codex bypass flag" $ do
+      let opts = defaultClaudeOptions { provider = Codex, dangerouslySkipPermissions = True }
+      buildCodexArgs opts "/tmp/work" "/tmp/haskclaw-mcp" (ChatId (-7)) "/tmp/mcp.json" Nothing
+        `shouldBe`
+          [ "exec", "--json", "--skip-git-repo-check"
+          , "-C", "/tmp/work"
+          , "-c", "mcp_servers.haskclaw.command=\"/tmp/haskclaw-mcp\""
+          , "-c", "mcp_servers.haskclaw.args=[]"
+          , "-c", "mcp_servers.haskclaw.env.HASKCLAW_CHAT_ID=\"-7\""
+          , "--dangerously-bypass-approvals-and-sandbox"
           ]
 
   describe "buildClaudeEnv" $ do
@@ -195,6 +245,26 @@ spec = do
             ]
       parseStreamLine line
         `shouldBe` Right (EvResult "final answer" (Just (SessionId "xyz-789")) False)
+
+    it "extracts the session id from a Codex thread.started event" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("thread.started" :: Text)
+            , "thread_id" .= ("019ded83-3c1d-7b42-b8a9-56ce41d95efe" :: Text)
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvThreadStarted (SessionId "019ded83-3c1d-7b42-b8a9-56ce41d95efe"))
+
+    it "extracts agent text from a Codex item.completed event" $ do
+      let line = encodeStrict $ object
+            [ "type" .= ("item.completed" :: Text)
+            , "item" .= object
+                [ "id" .= ("item_0" :: Text)
+                , "type" .= ("agent_message" :: Text)
+                , "text" .= ("hello from codex" :: Text)
+                ]
+            ]
+      parseStreamLine line
+        `shouldBe` Right (EvAssistant [CbText "hello from codex"])
 
     it "falls back to EvOther for unknown event types" $ do
       let line = encodeStrict $ object [ "type" .= ("mystery" :: Text) ]

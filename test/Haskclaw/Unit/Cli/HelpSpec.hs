@@ -31,6 +31,7 @@ spec = do
       helpText `shouldSatisfy` ("-h" `T.isInfixOf`)
       helpText `shouldSatisfy` ("--all" `T.isInfixOf`)
       helpText `shouldSatisfy` ("--all-messages" `T.isInfixOf`)
+      helpText `shouldSatisfy` ("--assistant" `T.isInfixOf`)
       helpText `shouldSatisfy` ("--dangerously-skip-permissions" `T.isInfixOf`)
 
     it "documents the TELEGRAM_BOT_TOKEN env var" $

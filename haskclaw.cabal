@@ -6,7 +6,7 @@ cabal-version: 1.12
 
 name:           haskclaw
 version:        0.1.0.0
-description:    Telegram ↔ Claude Code bridge bot
+description:    Telegram ↔ assistant CLI bridge bot
 homepage:       https://github.com/eunmin/haskclaw#readme
 bug-reports:    https://github.com/eunmin/haskclaw/issues
 author:         Eunmin Kim
