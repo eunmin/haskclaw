@@ -28,7 +28,7 @@ import Haskclaw.Telegram.Command.UseCase.MentionFilter
   , shouldDispatch
   )
 import Haskclaw.Telegram.Infra.Gateway.AssistantProcessGateway
-  ( AssistantOptions
+  ( AssistantOptions (..)
   , parseAssistantOptions
   )
 import Haskclaw.Telegram.Command.Domain.Types
@@ -140,7 +140,8 @@ handleUserTurn assistantOpts botState manager token cid chan msg = do
   let user = fromMaybe "unknown" msg.fromUsername
       content = fromMaybe "" msg.text
   logChat cid $ "received @" <> user <> ": " <> content
-  mSessionId <- Map.lookup cid <$> readTVarIO botState.sessions
+  mSessionId <- Map.lookup assistantOpts.provider . fromMaybe mempty . Map.lookup cid
+    <$> readTVarIO botState.sessions
   let sink = deliverReply manager token
   outcome <- runInterruptible chan $
     withPeriodic typingIntervalMicros
@@ -154,7 +155,8 @@ handleUserTurn assistantOpts botState manager token cid chan msg = do
     Right (Just mNewSessionId) -> do
       whenJust mNewSessionId $ \newSessionId -> do
         newSessions <- atomically $ do
-          modifyTVar' botState.sessions (Map.insert cid newSessionId)
+          modifyTVar' botState.sessions
+            (Map.alter (Just . Map.insert assistantOpts.provider newSessionId . fromMaybe mempty) cid)
           readTVar botState.sessions
         saveSessions newSessions
       pure TurnCompleted

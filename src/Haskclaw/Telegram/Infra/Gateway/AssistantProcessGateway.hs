@@ -42,15 +42,10 @@ import System.Process.Typed
   )
 
 import Haskclaw.Infra.Paths (chatIdSlug, chatMcpJsonPath, ensureChatConfig, ensureChatDir, mcpBinaryPath)
-import Haskclaw.Telegram.Command.Domain.Types (ChatId (..), SessionId (..))
+import Haskclaw.Telegram.Command.Domain.Types (AssistantProvider (..), ChatId (..), SessionId (..))
 import Haskclaw.Util.ChatLog (logChat)
 
 -- | CLI-flag knobs that control how the assistant subprocess is invoked.
-data AssistantProvider
-  = Claude
-  | Codex
-  deriving stock (Show, Eq)
-
 data AssistantOptions = AssistantOptions
   { provider :: AssistantProvider
   , dangerouslySkipPermissions :: Bool

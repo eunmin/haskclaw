@@ -226,6 +226,7 @@ test-suite haskclaw-test
   other-modules:
       Haskclaw.Unit.Cli.HelpSpec
       Haskclaw.Unit.Infra.PathsSpec
+      Haskclaw.Unit.Infra.Persistence.StateFileSpec
       Haskclaw.Unit.Mcp.ServerSpec
       Haskclaw.Unit.Scheduler.CronSpec
       Haskclaw.Unit.Scheduler.StoreSpec
