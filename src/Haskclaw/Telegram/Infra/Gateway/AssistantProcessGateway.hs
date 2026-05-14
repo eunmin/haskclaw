@@ -4,6 +4,7 @@ module Haskclaw.Telegram.Infra.Gateway.AssistantProcessGateway
   , buildAssistantEnv
   , buildClaudeArgs
   , buildCodexArgs
+  , formatProcessFailure
   , parseAssistantOptions
   , AssistantProvider (..)
   , AssistantOptions (..)
@@ -171,13 +172,15 @@ runStreamingAssistant opts rawSink cid workDir mSessionId input = do
           $ setEnv (buildAssistantEnv cid baseEnv)
           $ setStdin (byteStringInput (encodeUtf8 input))
           $ proc command args
-  (exit, mFinal, errText) <- withProcessWait process $ \p -> do
+  (exit, mFinal, errText, stdoutParseFailures) <- withProcessWait process $ \p -> do
     resultRef <- newIORef Nothing
-    readLoop sink cid (getStdout p) resultRef
+    stdoutParseFailuresRef <- newIORef []
+    readLoop sink cid (getStdout p) resultRef stdoutParseFailuresRef
     errBytes <- BS.hGetContents (getStderr p)
     code <- waitExitCode p
     final <- readIORef resultRef
-    pure (code, final, decodeUtf8 errBytes :: Text)
+    stdoutParseFailures <- reverse <$> readIORef stdoutParseFailuresRef
+    pure (code, final, decodeUtf8 errBytes :: Text, stdoutParseFailures)
   case (exit, mFinal) of
     (ExitSuccess, Just (txt, sid)) -> do
       sent <- readIORef sentRef
@@ -185,27 +188,39 @@ runStreamingAssistant opts rawSink cid workDir mSessionId input = do
       pure (Right sid)
     (ExitSuccess, Nothing) -> pure (Left "stream ended without a result event")
     (ExitFailure code, _) -> pure $ Left $
-      showProvider opts.provider <> " process failed (exit " <> show code <> "): " <> errText
+      formatProcessFailure opts.provider code errText stdoutParseFailures
+
+formatProcessFailure :: AssistantProvider -> Int -> Text -> [Text] -> Text
+formatProcessFailure provider code errText stdoutParseFailures =
+  showProvider provider <> " process failed (exit " <> show code <> "): " <> detail
+  where
+    strippedErr = T.strip errText
+    detail
+      | not (T.null strippedErr) = errText
+      | otherwise = T.intercalate "\n" stdoutParseFailures
 
 -- | Read stdout line by line, decode each event, log to console, and capture the final result.
-readLoop :: (Text -> IO ()) -> ChatId -> Handle -> IORef (Maybe (Text, SessionId)) -> IO ()
-readLoop sink cid h ref = do
+readLoop :: (Text -> IO ()) -> ChatId -> Handle -> IORef (Maybe (Text, SessionId)) -> IORef [Text] -> IO ()
+readLoop sink cid h ref stdoutParseFailuresRef = do
   eof <- SIO.hIsEOF h
   unless eof $ do
     line <- BS8.hGetLine h
-    handleLine sink cid line ref
-    readLoop sink cid h ref
+    handleLine sink cid line ref stdoutParseFailuresRef
+    readLoop sink cid h ref stdoutParseFailuresRef
 
 handleLine
   :: (Text -> IO ())
   -> ChatId
   -> ByteString
   -> IORef (Maybe (Text, SessionId))
+  -> IORef [Text]
   -> IO ()
-handleLine sink cid line ref = case parseStreamLine line of
-  Left err ->
+handleLine sink cid line ref stdoutParseFailuresRef = case parseStreamLine line of
+  Left err -> do
+    let rawLine = truncText 4000 (decodeUtf8 line)
+    modifyIORef' stdoutParseFailuresRef (rawLine :)
     logChat cid $ "stream parse error: " <> toText err
-      <> " line=" <> truncText 200 (decodeUtf8 line)
+      <> " line=" <> truncText 200 rawLine
   Right ev -> renderEvent sink cid ev ref
 
 -- | Augment the inherited process environment with per-chat variables the

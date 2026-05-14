@@ -19,6 +19,7 @@ import Haskclaw.Telegram.Infra.Gateway.AssistantProcessGateway
   , buildCodexArgs
   , compactBoundaryNotice
   , defaultAssistantOptions
+  , formatProcessFailure
   , parseAssistantOptions
   , parseStreamLine
   )
@@ -158,6 +159,15 @@ spec = do
         , ("PATH", "/bin")
         , ("AGENT_BROWSER_SESSION", "99")
         ]
+
+  describe "formatProcessFailure" $ do
+    it "uses stderr when stderr is present" $
+      formatProcessFailure Codex 1 "stderr details" ["stdout details"]
+        `shouldBe` "codex process failed (exit 1): stderr details"
+
+    it "falls back to stdout parse failures when stderr is empty" $
+      formatProcessFailure Codex 1 "" ["ERROR: You've hit your usage limit."]
+        `shouldBe` "codex process failed (exit 1): ERROR: You've hit your usage limit."
 
   describe "parseStreamLine" $ do
     it "extracts session_id and model from a system/init event" $ do
